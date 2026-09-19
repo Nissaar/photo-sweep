@@ -436,6 +436,15 @@ export default {
 		},
 
 		onPointerDown(event) {
+			// A press that lands on the play button, or on the video's own controls,
+			// is not the start of a swipe. Letting it through matters more than it
+			// looks: the capture below redirects every later pointer event to the
+			// card, and the button consequently never sees a click at all — which is
+			// why the play button did nothing and videos could only be looked at.
+			if (event.target instanceof Element && event.target.closest('button, video')) {
+				return
+			}
+
 			if (this.playing || event.button !== 0) {
 				return
 			}

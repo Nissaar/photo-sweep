@@ -15,9 +15,10 @@
 						<CalendarMonth :size="20" />
 					</template>
 					<template #counter>
-						<NcCounterBubble v-if="summary.monthsToReview">
-							{{ summary.monthsToReview }}
-						</NcCounterBubble>
+						<!-- The number goes in `count`, not the slot: the component
+						     renders Intl.NumberFormat().format(count) and ignores any
+						     content, so slotting it showed a literal NaN. -->
+						<NcCounterBubble v-if="summary.monthsToReview" :count="summary.monthsToReview" />
 					</template>
 				</NcAppNavigationItem>
 
@@ -29,9 +30,10 @@
 						<DeleteClock :size="20" />
 					</template>
 					<template #counter>
-						<NcCounterBubble v-if="summary.pendingDeletes" type="highlighted">
-							{{ summary.pendingDeletes }}
-						</NcCounterBubble>
+						<NcCounterBubble
+							v-if="summary.pendingDeletes"
+							:count="summary.pendingDeletes"
+							type="highlighted" />
 					</template>
 				</NcAppNavigationItem>
 
