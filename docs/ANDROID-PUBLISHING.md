@@ -11,6 +11,12 @@ Nothing here blocks shipping. An `android-v*` tag already builds, signs and atta
 an APK to a GitHub release, and that release is a perfectly good distribution channel
 on its own. Treat the stores as additions to it rather than the way in.
 
+> **Play is deliberately not being pursued for now.** The tester gate below costs
+> twelve real people and a fortnight before the app can reach anybody, which is a poor
+> trade for a self-hosting audience that largely installs from F-Droid anyway. The
+> section is kept because the decision is worth revisiting once the app has users, and
+> because the API level requirement it forced is good practice regardless.
+
 ## The three channels, and what each actually costs
 
 | | GitHub release | F-Droid | Google Play |
