@@ -113,6 +113,12 @@ jobs:
 
       # `integrity:sign-app` writes appinfo/signature.json, which is what a server
       # checks. It needs an `occ`, so it runs inside the official image.
+      #
+      # From /usr/src/nextcloud, not /var/www/html. The image ships the release in
+      # the former and its entrypoint copies it to the latter on first start —
+      # overriding the entrypoint, which is the whole point here, means that copy
+      # never happens and /var/www/html is empty. Signing needs no installed
+      # instance: SignApp is registered before occ checks for one.
       - name: Sign the package contents
         if: steps.signing.outputs.present == 'true'
         run: |
@@ -122,7 +128,7 @@ jobs:
             -v "$RUNNER_TEMP/certs:/certs:ro" \
             --entrypoint php \
             nextcloud:stable \
-            /var/www/html/occ integrity:sign-app \
+            /usr/src/nextcloud/occ integrity:sign-app \
               --privateKey=/certs/photosweep.key \
               --certificate=/certs/photosweep.crt \
               --path=/build/photosweep
