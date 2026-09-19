@@ -18,6 +18,11 @@ changing your actual password. The app never sees the real one.
 The app password is held in `EncryptedSharedPreferences`, encrypted under a key the
 Android Keystore holds and the app itself cannot read.
 
+On a device whose Keystore is unusable, the password is kept in memory for that
+session and never written to disk, so you are asked to sign in again after a restart.
+It is not quietly written out in clear text instead — that would make the sentence
+above false exactly on the devices where it matters most.
+
 ## Swiping offline
 
 A verdict is written to a local queue first and sent afterwards. That is what makes
