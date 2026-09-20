@@ -24,6 +24,19 @@
         tools:node="remove" />
 
     <!--
+      media3 1.11 began declaring WAKE_LOCK so a background player can hold the CPU
+      awake through a long track. Playback here is a short clip the user is looking
+      at, in the foreground, in a screen they swipe away a second later — the screen
+      is already on, and nothing plays once the app is not in front.
+
+      Caught by the permission assertion in CI rather than by review, which is
+      exactly the job that check exists to do.
+    -->
+    <uses-permission
+        android:name="android.permission.WAKE_LOCK"
+        tools:node="remove" />
+
+    <!--
       Login Flow v2 sends the user to their own Nextcloud in a browser, so the app
       needs to know a browser exists in order to hand it the URL.
     -->
