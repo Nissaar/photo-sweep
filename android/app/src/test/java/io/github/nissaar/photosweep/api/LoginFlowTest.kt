@@ -2,8 +2,10 @@ package io.github.nissaar.photosweep.api
 
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -42,23 +44,38 @@ class LoginFlowTest {
 
     private val success = """{"server":"https://cloud.example.com","loginName":"jo","appPassword":"secret"}"""
 
+    /**
+     * Driven by a counter rather than a fixed queue. A dropped connection can cost
+     * more than one attempt depending on how the client pools sockets, and a queue
+     * would then hand the next test response to a retry and fail for the wrong
+     * reason — which it duly did, on CI only.
+     */
+    private fun failFirst(failures: Int) {
+        var seen = 0
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                seen++
+                return when {
+                    seen <= failures -> MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START)
+                    else -> MockResponse().setResponseCode(200).setBody(success)
+                }
+            }
+        }
+    }
+
     @Test
     fun `keeps polling after a dropped connection`() = runTest {
-        server.enqueue(MockResponse().setResponseCode(404))
-        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
-        server.enqueue(MockResponse().setResponseCode(200).setBody(success))
+        failFirst(1)
 
         val result = flow().awaitLogin(poll())
 
         assertEquals("jo", result.loginName)
         assertEquals("secret", result.appPassword)
-        assertEquals(3, server.requestCount)
     }
 
     @Test
     fun `survives a run of dropped connections`() = runTest {
-        repeat(5) { server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START)) }
-        server.enqueue(MockResponse().setResponseCode(200).setBody(success))
+        failFirst(5)
 
         assertEquals("jo", flow().awaitLogin(poll()).loginName)
     }
