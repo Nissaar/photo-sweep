@@ -1,7 +1,7 @@
 {
   "name": "photosweep",
   "description": "Go through your Nextcloud photo library one photo at a time",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "author": "Nissaar",
   "license": "AGPL-3.0-or-later",
   "private": true,
