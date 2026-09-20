@@ -1,0 +1,5 @@
+First release.
+
+Go through a Nextcloud photo library month by month, one photo at a time, with
+verdicts queued on the phone so swiping never waits for the network. Nothing is
+deleted until you confirm it on the review screen.

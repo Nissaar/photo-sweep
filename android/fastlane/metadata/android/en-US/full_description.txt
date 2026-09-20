@@ -1,0 +1,28 @@
+Photo Sweep turns tidying a large photo library into something you can actually finish: pick a month, judge one photo at a time, then review everything you marked before a single file is touched.
+
+This is the phone client. Your Nextcloud server needs the Photo Sweep app installed and enabled — the phone talks to it over the same API the web interface uses, so a verdict given here shows up there and the other way round.
+
+<b>Month by month</b>
+Your photos and videos are sorted by the date they were taken, not the date they were uploaded. Months you have finished move out of the way, so a library of thirty thousand photos becomes a list of months rather than one impossible pile.
+
+<b>One at a time</b>
+Keep or delete each photo with a swipe. Undo steps back.
+
+<b>Nothing happens until you confirm</b>
+Verdicts are held as a pending list. The review screen is the only place that changes your files, and it shows you everything first.
+
+<b>It works on a train</b>
+A verdict is saved to a queue on the phone before it is sent. Going through photos never waits for the network, and losing signal does not end a session — the queue is sent in one batch when the connection comes back.
+
+<b>Signing in</b>
+There is no login form. You type your server's address and the app hands you to your own Nextcloud's login page, so whatever two-factor or single sign-on you use still applies. What comes back is an app password: a per-device credential you can revoke from your Nextcloud's security settings without changing your real password. The app never sees the real one.
+
+<b>What it asks for</b>
+Internet access, and the two biometric permissions for the optional app lock. Nothing else — no storage, no accounts, no location. The build fails automatically if that list ever grows.
+
+Screenshots, screen recording and the recent-apps thumbnail are blocked. Cloud backup is off, and the app refuses to trust user-installed certificate authorities, so the connection cannot be read by an intercepting proxy.
+
+<b>Before you delete anything</b>
+Deletions are real. In trash mode they go to your Nextcloud trash and stay recoverable for as long as your server's retention policy allows — which an administrator can set to something short, and which does not exist at all if the trash app is disabled. The app tells you which case you are in, but a backup is the actual safety net.
+
+Requires Nextcloud 31 to 34 on the server, and Android 8.0 or later on the phone.

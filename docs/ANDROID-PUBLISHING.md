@@ -136,7 +136,7 @@ All already true here, but worth knowing why:
 ### Making the listing good for free
 
 F-Droid reads listing text and screenshots straight out of the repository if you put
-them where it looks:
+them where it looks. That is already in place:
 
 ```
 android/fastlane/metadata/android/en-US/
@@ -144,14 +144,21 @@ android/fastlane/metadata/android/en-US/
 ├── short_description.txt       # 80 characters
 ├── full_description.txt
 ├── images/
-│   ├── icon.png
-│   └── phoneScreenshots/
+│   ├── icon.png                # 512×512
+│   └── phoneScreenshots/       # ← still empty, see below
 └── changelogs/
-    └── <versionCode>.txt
+    └── 10000.txt               # the versionCode, not the version name
 ```
 
-Worth adding before submitting — it is the difference between a listing with real
-screenshots and one with none, and it costs nothing but writing the text once.
+**Screenshots are the one piece missing**, and they are the part that decides whether
+anybody installs it. Take two or three on a real phone — the month list, the deck
+mid-swipe, the review screen — and drop them in `images/phoneScreenshots/`. Any
+filename works; F-Droid sorts them alphabetically, so name them `01-months.png`,
+`02-deck.png` and so on to control the order.
+
+A `changelogs/` file is named after the **versionCode**, which this project derives
+from the tag: 1.0.0 becomes 10000, 1.0.1 becomes 10001. Getting that wrong means the
+changelog silently does not appear.
 
 ---
 

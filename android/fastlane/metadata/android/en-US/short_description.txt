@@ -1,0 +1,1 @@
+Go through your Nextcloud photos one at a time, keeping or deleting each one.
