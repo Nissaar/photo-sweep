@@ -20,7 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -66,6 +66,17 @@ private const val COMMIT_FRACTION = 0.28f
  * Dragging is the primary gesture and the buttons do exactly the same thing, because
  * a swipe is fast once you trust it and a button is what you reach for until you do.
  */
+/**
+ * One size for both cards, and deliberately a power of four.
+ *
+ * The card behind prefetches the next photo; the card in front then displays it. Ask
+ * for two different sizes and the browser cache never matches, so the prefetch is
+ * thrown away and every swipe pays a fresh round trip. Nextcloud also snaps a preview
+ * up to the next power of four and previewgenerator pre-renders that same ladder, so
+ * 1024 is a size servers tend to already hold — where 1600 quietly becomes 4096.
+ */
+private const val DECK_PREVIEW = 1024
+
 @Composable
 fun SwipeScreen(
     state: SwipeState,
@@ -105,7 +116,7 @@ fun SwipeScreen(
             }
 
             TextButton(onClick = onUndo, enabled = state.history.isNotEmpty()) {
-                Icon(Icons.Default.Undo, contentDescription = null, Modifier.size(18.dp))
+                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null, Modifier.size(18.dp))
                 Spacer(Modifier.size(4.dp))
                 Text("Undo")
             }
@@ -202,7 +213,7 @@ private fun Deck(state: SwipeState, onKeep: () -> Unit, onDelete: () -> Unit) {
         // rather than flashing an empty frame while it loads.
         state.next?.let { next ->
             AsyncImage(
-                model = account.previewUrl(next.fileId, 1024),
+                model = account.previewUrl(next.fileId, DECK_PREVIEW),
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
@@ -246,7 +257,7 @@ private fun Deck(state: SwipeState, onKeep: () -> Unit, onDelete: () -> Unit) {
                 VideoPlayer(url = account.fileUrl(current.path), modifier = Modifier.fillMaxSize())
             } else {
                 AsyncImage(
-                    model = account.previewUrl(current.fileId, 1600),
+                    model = account.previewUrl(current.fileId, DECK_PREVIEW),
                     contentDescription = current.name,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxSize(),

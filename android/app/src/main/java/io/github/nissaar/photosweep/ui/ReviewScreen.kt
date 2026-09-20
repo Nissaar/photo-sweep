@@ -1,5 +1,6 @@
 package io.github.nissaar.photosweep.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -234,6 +235,10 @@ private fun Tile(
 ) {
     Box {
         Column {
+            // The background matters rather than being decoration: everything under
+            // "already dealt with" has been moved to the trash, and the server has no
+            // preview left to serve for a trashed file. Without something behind it
+            // the tile is an invisible hole with a restore button floating in it.
             AsyncImage(
                 model = previewUrl,
                 contentDescription = decision.name,
@@ -242,6 +247,7 @@ private fun Tile(
                     .fillMaxWidth()
                     .aspectRatio(1f)
                     .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
                     .alpha(if (dimmed) 0.55f else 1f),
             )
             Text(

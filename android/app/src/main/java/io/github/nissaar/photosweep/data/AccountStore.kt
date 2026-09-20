@@ -2,9 +2,15 @@ package io.github.nissaar.photosweep.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
 import android.util.Log
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 
 private const val FILE = "photosweep-account"
 private const val KEY_SERVER = "server"
@@ -12,27 +18,38 @@ private const val KEY_LOGIN = "login_name"
 private const val KEY_PASSWORD = "app_password"
 private const val TAG = "AccountStore"
 
+private const val KEYSTORE = "AndroidKeyStore"
+private const val KEY_ALIAS = "photosweep.account"
+private const val TRANSFORMATION = "AES/GCM/NoPadding"
+private const val IV_BYTES = 12
+private const val TAG_BITS = 128
+
 /**
  * Where the app password lives.
  *
- * Held in `EncryptedSharedPreferences`, so the bytes on disk are encrypted under a key
- * the Android Keystore holds and the app itself never sees. That is the difference
- * between a stolen device backup containing a working credential and containing
- * nothing useful.
+ * Every value is encrypted with an AES-256-GCM key held in the Android Keystore. The
+ * key material never leaves the Keystore and this process cannot read it — what lands
+ * on disk is ciphertext, so a stolen device backup carries nothing usable.
  *
- * When the Keystore cannot be used, the password is kept **in memory for this session
- * only** and never written to disk. The earlier version fell back to plain
- * preferences, which meant a device with a broken Keystore silently stored a working
- * credential in clear text while the app went on claiming it was encrypted. Being
- * asked to sign in again after a restart is a far smaller cost than that.
+ * This used to be `EncryptedSharedPreferences`, which Google has deprecated and no
+ * longer maintains. Doing it directly removes a dependency, which F-Droid cares about,
+ * and removes the keyset corruption that library was known for on some devices — the
+ * failure this class previously had to work around.
+ *
+ * When the Keystore cannot be used at all, the password is kept in memory for the
+ * session and never written to disk. Being asked to sign in again after a restart is a
+ * far smaller cost than a credential sitting in clear text.
  */
 class AccountStore(context: Context) {
 
+    private val prefs: SharedPreferences =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+
     /** Null when the Keystore is unusable, which is what keeps the password off disk. */
-    private val prefs: SharedPreferences? = openEncrypted(context)
+    private val crypto: AccountCrypto? = AccountCrypto.open()
 
     /** False when this session's sign-in will not survive a restart. */
-    val isPersistent: Boolean get() = prefs != null
+    val isPersistent: Boolean get() = crypto != null
 
     @Volatile
     private var cached: Account? = load()
@@ -42,57 +59,95 @@ class AccountStore(context: Context) {
     fun isSignedIn(): Boolean = cached != null
 
     fun save(account: Account) {
-        prefs?.edit()
-            ?.putString(KEY_SERVER, account.server)
-            ?.putString(KEY_LOGIN, account.loginName)
-            ?.putString(KEY_PASSWORD, account.appPassword)
-            ?.apply()
+        val cipher = crypto
+        if (cipher != null) {
+            prefs.edit()
+                .putString(KEY_SERVER, cipher.encrypt(account.server))
+                .putString(KEY_LOGIN, cipher.encrypt(account.loginName))
+                .putString(KEY_PASSWORD, cipher.encrypt(account.appPassword))
+                .apply()
+        }
         cached = account
     }
 
     fun clear() {
-        prefs?.edit()?.clear()?.apply()
+        prefs.edit().clear().apply()
         cached = null
     }
 
     private fun load(): Account? {
-        val store = prefs ?: return null
-        val server = store.getString(KEY_SERVER, null) ?: return null
-        val login = store.getString(KEY_LOGIN, null) ?: return null
-        val password = store.getString(KEY_PASSWORD, null) ?: return null
+        val cipher = crypto ?: return null
+        val server = read(cipher, KEY_SERVER) ?: return null
+        val login = read(cipher, KEY_LOGIN) ?: return null
+        val password = read(cipher, KEY_PASSWORD) ?: return null
         return Account(server, login, password)
     }
+
+    private fun read(cipher: AccountCrypto, key: String): String? =
+        prefs.getString(key, null)?.let { cipher.decrypt(it) }
 }
 
 /**
- * Opens the encrypted store, or returns null rather than opening an unencrypted one.
+ * AES-256-GCM against a key the Android Keystore holds.
  *
- * The usual cause of a failure here is a keyset that no longer matches the file —
- * typically after the preferences have been restored onto a device whose Keystore
- * never had the original key. Nothing in that file can be read again, so throwing it
- * away and starting a fresh one costs a sign-in and fixes the device permanently.
+ * A fresh initialisation vector is generated per encryption — GCM is broken outright by
+ * reusing one — and stored in front of the ciphertext, which is what the offsets below
+ * are splitting apart.
  */
-private fun openEncrypted(context: Context): SharedPreferences? {
-    fun create(): SharedPreferences = EncryptedSharedPreferences.create(
-        context,
-        FILE,
-        MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-    )
+private class AccountCrypto(private val key: SecretKey) {
 
-    return try {
-        create()
-    } catch (first: Exception) {
-        Log.w(TAG, "Encrypted store unreadable; discarding it and retrying", first)
-        try {
-            context.deleteSharedPreferences(FILE)
-            create()
-        } catch (second: Exception) {
-            // Out of options. The app still works for this session; it just will not
-            // remember the password, which is the only safe thing left to do.
-            Log.e(TAG, "Keystore unusable; the password will not be stored", second)
+    fun encrypt(plain: String): String {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        val body = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
+        return Base64.encodeToString(cipher.iv + body, Base64.NO_WRAP)
+    }
+
+    /**
+     * Null rather than an exception when the stored value cannot be read back: a key
+     * invalidated by a factory reset or a restored backup is a sign-in that has
+     * expired, not a crash.
+     */
+    fun decrypt(stored: String): String? = try {
+        val bytes = Base64.decode(stored, Base64.NO_WRAP)
+        if (bytes.size <= IV_BYTES) {
             null
+        } else {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, bytes, 0, IV_BYTES))
+            String(cipher.doFinal(bytes, IV_BYTES, bytes.size - IV_BYTES), Charsets.UTF_8)
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "Stored account could not be decrypted; treating it as signed out", e)
+        null
+    }
+
+    companion object {
+        fun open(): AccountCrypto? = try {
+            AccountCrypto(existingKey() ?: generateKey())
+        } catch (e: Exception) {
+            Log.e(TAG, "Keystore unusable; the password will not be stored", e)
+            null
+        }
+
+        private fun existingKey(): SecretKey? {
+            val store = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+            return store.getKey(KEY_ALIAS, null) as? SecretKey
+        }
+
+        private fun generateKey(): SecretKey {
+            val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
+            generator.init(
+                KeyGenParameterSpec.Builder(
+                    KEY_ALIAS,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                )
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256)
+                    .build(),
+            )
+            return generator.generateKey()
         }
     }
 }

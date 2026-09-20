@@ -15,8 +15,13 @@ single sign-on your server uses. What comes back is an **app password**: a per-d
 credential you can revoke from **Settings → Security** on your Nextcloud without
 changing your actual password. The app never sees the real one.
 
-The app password is held in `EncryptedSharedPreferences`, encrypted under a key the
-Android Keystore holds and the app itself cannot read.
+The app password is encrypted with AES-256-GCM under a key the Android Keystore holds
+and this process cannot read. What reaches the disk is ciphertext.
+
+That used to be `EncryptedSharedPreferences`. Google has deprecated the library and no
+longer maintains it, and it was the known source of the keyset corruption this app had
+to defend against, so the Keystore is now used directly — one less dependency, and one
+less thing to go wrong.
 
 On a device whose Keystore is unusable, the password is kept in memory for that
 session and never written to disk, so you are asked to sign in again after a restart.
@@ -55,7 +60,7 @@ Other measures:
 
 | Measure | Where |
 |---|---|
-| App password in Keystore-backed encrypted preferences | `data/AccountStore.kt` |
+| App password encrypted with AES-256-GCM under a Keystore key | `data/AccountStore.kt` |
 | `FLAG_SECURE` — no screenshots, screen recording or recents thumbnail | `MainActivity.kt` |
 | Optional biometric / device-credential lock | `MainActivity.maybePromptUnlock` |
 | Cleartext refused; **user-installed CAs not trusted**, defeating proxy interception | `res/xml/network_security_config.xml` |
