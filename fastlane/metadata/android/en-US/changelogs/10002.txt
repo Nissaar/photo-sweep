@@ -1,0 +1,6 @@
+No changes to the app itself.
+
+The Gradle wrapper now records the checksum of the distribution it downloads, so
+a tampered Gradle release cannot go unnoticed, and the wrapper jar matches the
+version it declares. The store listing text and screenshots moved to where
+F-Droid looks for them.
