@@ -30,7 +30,7 @@ jobs:
     # Hoisted to job level on purpose: the `secrets` context is not available in a
     # step-level `if`, but `env` is. This is what makes optional signing work.
     env:
-      KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
 
     steps:
       - name: Resolve version
@@ -106,9 +106,9 @@ jobs:
       - name: Sign APK
         if: steps.keystore.outputs.present == 'true'
         env:
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           VERSION: ${{ steps.version.outputs.number }}
         run: |
           set -euo pipefail

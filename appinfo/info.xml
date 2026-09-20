@@ -42,6 +42,7 @@ review from your phone.
 		next to it. The schema requires https and this position, between <repository>
 		and <dependencies>.
 	-->
+	<screenshot>https://raw.githubusercontent.com/Nissaar/photo-sweep/main/screenshots/months.png</screenshot>
 	<screenshot>https://raw.githubusercontent.com/Nissaar/photo-sweep/main/screenshots/review.png</screenshot>
 	<dependencies>
 		<php min-version="8.1"/>

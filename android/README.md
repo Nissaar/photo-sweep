@@ -98,10 +98,10 @@ Then add four repository secrets under **Settings → Secrets and variables → 
 
 | Secret | Value |
 |---|---|
-| `ANDROID_KEYSTORE_BASE64` | `base64 -w0 nextcloud-photo-sweep-release.jks` |
-| `ANDROID_KEY_ALIAS` | the alias you chose |
-| `ANDROID_KEYSTORE_PASSWORD` | the password you chose |
-| `ANDROID_KEY_PASSWORD` | the same password (PKCS12 uses one for both) |
+| `KEYSTORE_BASE64` | `base64 -w0 nextcloud-photo-sweep-release.jks` |
+| `KEY_ALIAS` | the alias you chose |
+| `KEYSTORE_PASSWORD` | the password you chose |
+| `KEY_PASSWORD` | the same password (PKCS12 uses one for both) |
 
 Pushing an `android-v*` tag then builds, signs, checksums and publishes the APK.
 Without the secrets it still runs and publishes an **unsigned** APK, labelled as such,
