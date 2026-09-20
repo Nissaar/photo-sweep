@@ -27,7 +27,7 @@ modification time when it is not, so it works on any install.
 A companion Android app talks to this app over its REST API, so you can do the same
 review from your phone.
 	]]></description>
-	<version>1.0.1</version>
+	<version>1.0.2</version>
 	<licence>agpl</licence>
 	<author mail="mushir.gopee@aqr8.fr">Nissaar</author>
 	<namespace>PhotoSweep</namespace>
