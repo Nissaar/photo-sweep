@@ -1,0 +1,9 @@
+Signing in no longer fails at random. The app waited for the browser by polling
+every couple of seconds, and a single dropped connection anywhere in that window
+ended the attempt with "could not reach that server".
+
+The app password is now encrypted directly against the Android Keystore rather
+than through a deprecated library. Everyone signs in once more after updating.
+
+Photos in the deck load faster, and files already dealt with no longer show as
+blank tiles.
