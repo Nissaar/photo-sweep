@@ -3,11 +3,13 @@ package io.github.nissaar.photosweep.api
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.IOException
 
 @Serializable
 data class LoginPoll(val token: String, val endpoint: String)
@@ -32,6 +34,8 @@ data class LoginResult(val server: String, val loginName: String, val appPasswor
 class LoginFlow(
     private val client: OkHttpClient,
     private val json: Json = Json { ignoreUnknownKeys = true },
+    /** Overridden in tests, which cannot wait two seconds between polls. */
+    private val pollIntervalMs: Long = POLL_INTERVAL_MS,
 ) {
 
     companion object {
@@ -81,18 +85,32 @@ class LoginFlow(
                 .post(FormBody.Builder().add("token", poll.token).build())
                 .build()
 
-            val result = client.newCall(request).execute().use { response ->
-                when {
-                    response.isSuccessful ->
-                        json.decodeFromString<LoginResult>(response.body?.string().orEmpty())
-                    // Still waiting for the person to get through their login page.
-                    response.code == 404 -> null
-                    else -> throw LoginException("The server rejected the sign-in (HTTP ${response.code})")
+            val result = try {
+                client.newCall(request).execute().use { response ->
+                    when {
+                        response.isSuccessful ->
+                            json.decodeFromString<LoginResult>(response.body?.string().orEmpty())
+                        // Still waiting for the person to get through their login page.
+                        response.code == 404 -> null
+                        else -> throw LoginException("The server rejected the sign-in (HTTP ${response.code})")
+                    }
                 }
+            } catch (e: IOException) {
+                // Keep waiting. This loop runs for twenty minutes, every two seconds,
+                // while the user is off in a browser — which is exactly when the phone
+                // is most likely to drop to mobile data, doze the radio, or have the
+                // proxy close the idle connection this call would have reused. Letting
+                // one such failure out ended the whole sign-in with "could not reach
+                // that server", seconds after the browser had said it worked.
+                null
+            } catch (e: SerializationException) {
+                // A half-read body is the same kind of accident as a dropped socket:
+                // the connection broke, it just broke late enough to return bytes.
+                null
             }
             if (result != null) return@withContext result
 
-            delay(POLL_INTERVAL_MS)
+            delay(pollIntervalMs)
         }
 
         throw LoginException("Sign-in timed out. Start again when you are ready.")

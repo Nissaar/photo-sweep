@@ -1,7 +1,9 @@
 package io.github.nissaar.photosweep.vm
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,6 +32,10 @@ data class LoginState(
  * typed into this app at all.
  */
 class LoginViewModel : ViewModel() {
+
+    private companion object {
+        const val TAG = "LoginViewModel"
+    }
 
     private val _state = MutableStateFlow(LoginState())
     val state: StateFlow<LoginState> = _state.asStateFlow()
@@ -65,7 +71,13 @@ class LoginViewModel : ViewModel() {
                 _state.value = _state.value.copy(waiting = false, signedIn = true)
             } catch (e: LoginException) {
                 _state.value = _state.value.copy(starting = false, waiting = false, error = e.message)
+            } catch (e: CancellationException) {
+                // Cancelling is not a failure, and it arrives here as an ordinary
+                // exception. Swallowing it below turned every cancelled sign-in into
+                // a connection error, and broke structured concurrency besides.
+                throw e
             } catch (e: Exception) {
+                Log.w(TAG, "Sign-in failed", e)
                 _state.value = _state.value.copy(
                     starting = false,
                     waiting = false,
