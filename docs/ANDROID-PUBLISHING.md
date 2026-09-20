@@ -81,8 +81,8 @@ The tedious part, and the part that gets listings rejected:
 
 - **Data safety.** This app collects nothing and sends nothing anywhere except the
   user's own Nextcloud. Say exactly that. The one thing to declare honestly is the
-  app password held in `EncryptedSharedPreferences`, which is stored on-device and
-  never transmitted to you.
+  app password, which is encrypted under an Android Keystore key, stays on the
+  device, and is never transmitted to you.
 - **Content rating** questionnaire — a photo utility rates as low as it goes.
 - **Privacy policy URL** — required even when you collect nothing. A page in this
   repository is acceptable; it has to be reachable and stable.
@@ -135,30 +135,48 @@ All already true here, but worth knowing why:
 
 ### Making the listing good for free
 
-F-Droid reads listing text and screenshots straight out of the repository if you put
-them where it looks. That is already in place:
+F-Droid reads listing text and screenshots straight out of the repository, and this is
+already in place:
 
 ```
-android/fastlane/metadata/android/en-US/
+fastlane/metadata/android/en-US/
 ├── title.txt
 ├── short_description.txt       # 80 characters
 ├── full_description.txt
 ├── images/
 │   ├── icon.png                # 512×512
-│   └── phoneScreenshots/       # ← still empty, see below
+│   └── phoneScreenshots/       # sorted alphabetically, hence the numbers
+│       ├── 01-months.png
+│       ├── 02-deck.png
+│       ├── 03-review.png
+│       └── 04-settings.png
 └── changelogs/
-    └── 10000.txt               # the versionCode, not the version name
+    ├── 10000.txt               # the versionCode, not the version name
+    └── 10001.txt
 ```
 
-**Screenshots are the one piece missing**, and they are the part that decides whether
-anybody installs it. Take two or three on a real phone — the month list, the deck
-mid-swipe, the review screen — and drop them in `images/phoneScreenshots/`. Any
-filename works; F-Droid sorts them alphabetically, so name them `01-months.png`,
-`02-deck.png` and so on to control the order.
+**It has to be at the repository root**, not beside the Android sources. F-Droid's
+scanner looks at the top level and at the Gradle module directory, and `android/`
+is neither — with it there the bot reports "Fastlane was not found in your repo" and
+the listing gets no description or screenshots at all.
 
 A `changelogs/` file is named after the **versionCode**, which this project derives
 from the tag: 1.0.0 becomes 10000, 1.0.1 becomes 10001. Getting that wrong means the
 changelog silently does not appear.
+
+### What the scanner bot checks
+
+It comments on the RFP within minutes, and it is worth reading rather than waiting:
+
+- **`distributionSha256Sum`** must be in `gradle-wrapper.properties`. Without it the
+  Gradle download is unverified, which is a real supply-chain hole. Set it with
+  `./gradlew wrapper --gradle-version <v> --gradle-distribution-sha256-sum <sum>`,
+  which also keeps `gradle-wrapper.jar` in step with the version the properties
+  declare — the bot checks that they match.
+- **Tracker libraries.** It scans every Gradle configuration, including Android's
+  internal test-platform tooling, so it can report trackers that are nowhere near the
+  APK. Check before believing it: `unzip -p app-release.apk classes.dex | strings |
+  grep -c <name>`.
 
 ---
 

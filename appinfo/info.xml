@@ -42,8 +42,14 @@ review from your phone.
 		next to it. The schema requires https and this position, between <repository>
 		and <dependencies>.
 	-->
-	<screenshot>https://raw.githubusercontent.com/Nissaar/photo-sweep/main/screenshots/months.png</screenshot>
-	<screenshot>https://raw.githubusercontent.com/Nissaar/photo-sweep/main/screenshots/review.png</screenshot>
+	<!--
+		JPEG, 1920 wide. The store does not hotlink this: it fetches the file once when
+		a release is registered and serves its own copy afterwards, so the URL has to
+		resolve at that moment and the file it points at is what everyone sees until
+		the next release. The previous PNGs ingested as zero bytes and the listing
+		showed an empty frame; this matches the shape of the screenshots that do work.
+	-->
+	<screenshot>https://raw.githubusercontent.com/Nissaar/photo-sweep/main/screenshots/months.jpg</screenshot>
 	<dependencies>
 		<php min-version="8.1"/>
 		<nextcloud min-version="31" max-version="34"/>
