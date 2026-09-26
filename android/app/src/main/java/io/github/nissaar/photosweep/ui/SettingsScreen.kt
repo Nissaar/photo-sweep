@@ -36,6 +36,8 @@ fun SettingsScreen(
     trashAvailable: Boolean,
     serverName: String,
     loginName: String,
+    /** False when the Keystore could not be used and the sign-in lasts this session only. */
+    signInPersistent: Boolean,
     allowScreenshots: Boolean,
     appLock: Boolean,
     onMode: (String) -> Unit,
@@ -122,7 +124,8 @@ fun SettingsScreen(
         Toggle(
             checked = appLock,
             title = "Unlock with biometrics",
-            body = "Ask for your fingerprint or device PIN each time the app is opened.",
+            body = "Ask for your fingerprint or device PIN each time the app comes back " +
+                "to the front, after more than a few seconds away.",
             onChange = onAppLock,
         )
         Toggle(
@@ -156,10 +159,21 @@ fun SettingsScreen(
             "$loginName on $serverName",
             style = MaterialTheme.typography.bodyMedium,
         )
+        if (!signInPersistent) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "This phone's secure storage is not working, so your sign-in is kept in " +
+                    "memory only. You will be asked to sign in again after the app closes.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
         Spacer(Modifier.height(4.dp))
         Text(
-            "Signing out removes this device's app password from the phone. Revoke it " +
-                "on the server too, from Settings → Security, if the device is lost.",
+            "Signing out revokes this device's app password on the server and clears " +
+                "the previews stored on the phone. If the phone is offline at the time, " +
+                "revoke it yourself from Settings → Security in Nextcloud. Do that too if " +
+                "the device is lost.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

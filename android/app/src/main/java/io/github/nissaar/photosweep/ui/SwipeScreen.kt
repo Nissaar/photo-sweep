@@ -80,12 +80,16 @@ private const val DECK_PREVIEW = 1024
 @Composable
 fun SwipeScreen(
     state: SwipeState,
+    /** How many verdicts the month holds, for the review-again confirmation. */
+    verdictsInMonth: Int?,
     onKeep: () -> Unit,
     onDelete: () -> Unit,
     onUndo: () -> Unit,
     onReviewAgain: () -> Unit,
     onBack: () -> Unit,
 ) {
+    var confirmingReviewAgain by remember { mutableStateOf(false) }
+
     Column(Modifier.fillMaxSize()) {
         LinearProgressIndicator(
             progress = { state.progress },
@@ -143,7 +147,7 @@ fun SwipeScreen(
                     title = "Nothing left in this month",
                     body = "Every photo here already has a verdict.",
                     actionLabel = "Review this month again",
-                    onAction = onReviewAgain,
+                    onAction = { confirmingReviewAgain = true },
                 )
 
                 state.finished -> Message(
@@ -191,6 +195,19 @@ fun SwipeScreen(
                 }
             }
         }
+    }
+
+    val month = state.month
+    if (confirmingReviewAgain && month != null) {
+        ReviewAgainDialog(
+            month = month,
+            verdicts = verdictsInMonth,
+            onConfirm = {
+                confirmingReviewAgain = false
+                onReviewAgain()
+            },
+            onDismiss = { confirmingReviewAgain = false },
+        )
     }
 }
 
