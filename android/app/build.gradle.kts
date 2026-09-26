@@ -7,21 +7,6 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-/**
- * Written out rather than derived from the release tag, so anyone building from a
- * checkout gets the version the release did. F-Droid builds from the tag with no
- * RELEASE_TAG in its environment, and a derived version came out as 0.1.0-dev.
- *
- * The release workflow checks that the tag agrees with versionName and that a
- * changelog exists for versionCode, so the two cannot drift apart unnoticed.
- *
- * Android decides what counts as an update purely from versionCode, and it must
- * increase every release or the new APK will not install over the old one. The
- * scheme is major * 10000 + minor * 100 + patch.
- */
-val appVersionName = "1.0.2"
-val appVersionCode = 10002
-
 android {
     namespace = "io.github.nissaar.photosweep"
     compileSdk = 36
@@ -30,8 +15,18 @@ android {
         applicationId = "io.github.nissaar.photosweep"
         minSdk = 26
         targetSdk = 36
-        versionCode = appVersionCode
-        versionName = appVersionName
+        // Written out rather than derived from the release tag, so anyone building
+        // from a checkout gets the version the release did. F-Droid builds from the
+        // tag with no RELEASE_TAG in its environment, and a derived version came out
+        // as 0.1.0-dev. Kept as literals on these two lines because the release
+        // workflow and F-Droid's checkupdates both read them from here.
+        //
+        // The release workflow checks that the tag agrees with versionName and that
+        // a changelog exists for versionCode. Android decides what counts as an
+        // update purely from versionCode, so it must increase every release; the
+        // scheme is major * 10000 + minor * 100 + patch.
+        versionCode = 10002
+        versionName = "1.0.2"
     }
 
     buildTypes {
