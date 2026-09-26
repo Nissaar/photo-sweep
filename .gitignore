@@ -14,7 +14,6 @@
 # Signing material. The private key must never reach the repository.
 *.key
 *.crt
-!appinfo/signature.json
 
 # Local tooling
 .php-cs-fixer.cache
