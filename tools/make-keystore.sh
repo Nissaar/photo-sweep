@@ -55,9 +55,12 @@ echo
 echo "Created: $OUT (permissions set to 600)"
 echo
 echo "Fingerprint — keep a copy of this somewhere separate, so you can always"
-echo "verify which key an APK was signed with:"
+echo "verify which key an APK was signed with."
 echo
-keytool -list -v -keystore "$OUT" -alias "$ALIAS" 2>/dev/null \
+echo "Enter the keystore password once more to read it back:"
+# keytool prompts on stderr, so stderr has to stay visible here: hiding it hides the
+# prompt, and the script then looks frozen while it waits for a password.
+keytool -list -v -keystore "$OUT" -alias "$ALIAS" \
     | grep -E "SHA1:|SHA256:|Valid from" || true
 
 cat <<EOF
