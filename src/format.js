@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { formatFileSize } from '@nextcloud/files'
 import { getCanonicalLocale, translate as t } from '@nextcloud/l10n'
 
 /**
@@ -24,18 +25,31 @@ export function monthLabel(yearMonth) {
 }
 
 /**
+ * A day, in the timezone the server buckets months in.
+ *
+ * The browser's own zone is the wrong one here: a photo taken just before midnight
+ * would sit in July on the grid and read as 1 August on the card.
+ *
  * @param {number} seconds epoch seconds
+ * @param {string|null} timeZone an IANA zone name, from the user's config
  * @return {string}
  */
-export function dateLabel(seconds) {
+export function dateLabel(seconds, timeZone = null) {
 	if (!seconds) {
 		return ''
 	}
-	return new Date(seconds * 1000).toLocaleDateString(getCanonicalLocale(), {
+	const date = new Date(seconds * 1000)
+	const format = {
 		day: 'numeric',
 		month: 'short',
 		year: 'numeric',
-	})
+	}
+	try {
+		return date.toLocaleDateString(getCanonicalLocale(), timeZone ? { ...format, timeZone } : format)
+	} catch {
+		// A zone name this browser does not know throws rather than falling back.
+		return date.toLocaleDateString(getCanonicalLocale(), format)
+	}
 }
 
 /**
@@ -46,14 +60,7 @@ export function sizeLabel(bytes) {
 	if (!bytes) {
 		return ''
 	}
-	const units = ['B', 'KB', 'MB', 'GB', 'TB']
-	let value = bytes
-	let unit = 0
-	while (value >= 1024 && unit < units.length - 1) {
-		value /= 1024
-		unit++
-	}
-	return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`
+	return formatFileSize(bytes)
 }
 
 /**
