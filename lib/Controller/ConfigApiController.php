@@ -35,7 +35,8 @@ class ConfigApiController extends AuthenticatedOcsController {
 	}
 
 	/**
-	 * Every field is optional; only what is sent is changed.
+	 * Every field is optional; only what is sent is changed. If any of it is refused,
+	 * none of it is saved.
 	 */
 	#[NoAdminRequired]
 	public function update(
@@ -47,18 +48,7 @@ class ConfigApiController extends AuthenticatedOcsController {
 		$userId = $this->userId();
 
 		try {
-			if ($mode !== null) {
-				$this->configService->setMode($userId, $mode);
-			}
-			if ($targetFolder !== null) {
-				$this->configService->setTargetFolder($userId, $targetFolder);
-			}
-			if ($sourceFolder !== null) {
-				$this->configService->setSourceFolder($userId, $sourceFolder);
-			}
-			if ($skipDecided !== null) {
-				$this->configService->setSkipDecided($userId, $skipDecided);
-			}
+			$this->configService->update($userId, $mode, $targetFolder, $sourceFolder, $skipDecided);
 		} catch (\InvalidArgumentException $e) {
 			throw new OCSBadRequestException($e->getMessage());
 		}
