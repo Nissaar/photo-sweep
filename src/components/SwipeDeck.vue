@@ -23,7 +23,6 @@
 			<NcButton
 				variant="tertiary"
 				:disabled="!history.length"
-				:aria-label="t('photosweep', 'Undo')"
 				@click="undo">
 				<template #icon>
 					<UndoVariant :size="20" />
@@ -32,23 +31,48 @@
 			</NcButton>
 		</div>
 
-		<NcProgressBar :value="progress" size="medium" />
+		<NcProgressBar :value="progress" size="medium" :aria-label="t('photosweep', 'Progress through this month')" />
+
+		<!-- Swiping is silent otherwise: the card changes, and a screen reader has no
+		     way to know whether that was a keep, a delete or an undo. -->
+		<p class="hidden-visually" aria-live="polite">
+			{{ announcement }}
+		</p>
 
 		<div v-if="loading" class="pc-deck__centre">
 			<NcLoadingIcon :size="44" />
 		</div>
 
 		<NcEmptyContent
+			v-else-if="loadFailed"
+			:name="t('photosweep', 'Could not open this month')"
+			:description="t('photosweep', 'Your verdicts are safe. Check your connection and try again.')">
+			<template #icon>
+				<AlertCircle />
+			</template>
+			<template #action>
+				<NcButton @click="load(showingJudged ? false : null)">
+					{{ t('photosweep', 'Try again') }}
+				</NcButton>
+			</template>
+		</NcEmptyContent>
+
+		<NcEmptyContent
 			v-else-if="!items.length"
-			:name="t('photosweep', 'Nothing left in this month')"
-			:description="t('photosweep', 'Every photo here already has a verdict.')">
+			:name="showingJudged ? t('photosweep', 'No photos in this month') : t('photosweep', 'Nothing left in this month')"
+			:description="showingJudged ? '' : t('photosweep', 'Every photo here already has a verdict.')">
 			<template #icon>
 				<CheckAll />
 			</template>
-			<template #action>
-				<NcButton @click="reviewAgain">
-					{{ t('photosweep', 'Review this month again') }}
-				</NcButton>
+			<template v-if="!showingJudged" #action>
+				<div class="pc-deck__choices">
+					<NcButton @click="reviewAgain">
+						{{ t('photosweep', 'Review this month again') }}
+					</NcButton>
+					<NcButton variant="tertiary" @click="askReset">
+						{{ t('photosweep', 'Clear this month’s verdicts…') }}
+					</NcButton>
+				</div>
 			</template>
 		</NcEmptyContent>
 
@@ -60,17 +84,23 @@
 				<CheckAll />
 			</template>
 			<template #action>
-				<NcButton variant="primary" @click="$emit('back')">
-					{{ t('photosweep', 'Back to months') }}
-				</NcButton>
+				<div class="pc-deck__choices">
+					<NcButton variant="primary" @click="$emit('back')">
+						{{ t('photosweep', 'Back to months') }}
+					</NcButton>
+					<NcButton variant="tertiary" @click="askReset">
+						{{ t('photosweep', 'Clear this month’s verdicts…') }}
+					</NcButton>
+				</div>
 			</template>
 		</NcEmptyContent>
 
 		<div v-else class="pc-deck__stage">
 			<!-- The next photo sits behind the current one so a decision reveals it
-			     instantly rather than flashing an empty frame while it loads. -->
-			<div v-if="next" class="pc-card pc-card--behind">
-				<img :src="preview(next.fileId, DECK_SIZE)" :alt="next.name" loading="eager">
+			     instantly rather than flashing an empty frame while it loads. It is
+			     decoration until it moves forward, so it is hidden from assistive tech. -->
+			<div v-if="next" class="pc-card pc-card--behind" aria-hidden="true">
+				<img :src="preview(next.fileId, DECK_SIZE)" alt="" loading="eager">
 			</div>
 
 			<div
@@ -80,7 +110,7 @@
 				@pointerdown="onPointerDown"
 				@pointermove="onPointerMove"
 				@pointerup="onPointerUp"
-				@pointercancel="onPointerUp">
+				@pointercancel="onPointerCancel">
 				<video
 					v-if="current.isVideo && playing"
 					class="pc-card__media"
@@ -110,7 +140,7 @@
 				<div class="pc-card__meta">
 					<span class="pc-card__name" :title="current.path">{{ current.name }}</span>
 					<span class="pc-card__detail" :title="sourceHint">
-						{{ date(current.takenAt) }} · {{ size(current.size) }}
+						{{ date(current.takenAt, timeZone) }} · {{ size(current.size) }}
 					</span>
 				</div>
 			</div>
@@ -136,18 +166,38 @@
 		</div>
 
 		<p v-if="!loading && items.length && !finished" class="pc-deck__hint">
-			{{ t('photosweep', 'Drag the photo, use the buttons, or press the left and right arrow keys. Nothing is deleted until you confirm it on the Marked for deletion screen.') }}
+			{{ shortcutsOff
+				? t('photosweep', 'Drag the photo or use the buttons. Nothing is deleted until you confirm it on the Marked for deletion screen.')
+				: t('photosweep', 'Drag the photo, use the buttons, or press the left and right arrow keys. Nothing is deleted until you confirm it on the Marked for deletion screen.') }}
 		</p>
+
+		<NcDialog
+			v-if="resetCount !== null"
+			:name="t('photosweep', 'Clear this month’s verdicts?')"
+			:message="resetMessage"
+			@closing="resetCount = null">
+			<template #actions>
+				<NcButton variant="tertiary" @click="resetCount = null">
+					{{ t('photosweep', 'Cancel') }}
+				</NcButton>
+				<NcButton variant="error" @click="reset">
+					{{ t('photosweep', 'Clear verdicts') }}
+				</NcButton>
+			</template>
+		</NcDialog>
 	</div>
 </template>
 
 <script>
-import { showError } from '@nextcloud/dialogs'
-import { translate as t } from '@nextcloud/l10n'
+import { showError, showInfo } from '@nextcloud/dialogs'
+import { translatePlural as n, translate as t } from '@nextcloud/l10n'
+import { useHotKey } from '@nextcloud/vue/composables/useHotKey'
 import NcButton from '@nextcloud/vue/components/NcButton'
+import NcDialog from '@nextcloud/vue/components/NcDialog'
 import NcEmptyContent from '@nextcloud/vue/components/NcEmptyContent'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcProgressBar from '@nextcloud/vue/components/NcProgressBar'
+import AlertCircle from 'vue-material-design-icons/AlertCircle.vue'
 import ArrowLeft from 'vue-material-design-icons/ArrowLeft.vue'
 import Check from 'vue-material-design-icons/Check.vue'
 import CheckAll from 'vue-material-design-icons/CheckAll.vue'
@@ -177,15 +227,45 @@ const DECK_SIZE = 1024
 /** Photos to pull into the browser cache ahead of the one on screen. */
 const PREFETCH_AHEAD = 4
 
+/**
+ * For translations with a file name in them. Vue escapes the result when it renders
+ * it, so escaping here as well would show a name like "Tom & Jerry.jpg" as "&amp;".
+ */
+const PLAIN = { escape: false, sanitize: false }
+
+/**
+ * Whether a key press is one of the deck's shortcuts and nothing else wants it.
+ *
+ * useHotKey already skips text fields, modifier combinations, key repeat and open
+ * dialogs. It does not know about the video: with its controls focused, the arrow
+ * keys seek, and a seek must not also judge the photo.
+ *
+ * @param {KeyboardEvent} event the key press
+ * @return {boolean}
+ */
+function isDeckKey(event) {
+	if (event.defaultPrevented) {
+		return false
+	}
+	if (event.target instanceof Element && event.target.closest('video')) {
+		return false
+	}
+	// Some browsers fire keydown without a key, for autofill among others.
+	const key = event.key ?? ''
+	return key === 'ArrowLeft' || key === 'ArrowRight' || key.toLowerCase() === 'z'
+}
+
 export default {
 	name: 'SwipeDeck',
 
 	components: {
+		AlertCircle,
 		ArrowLeft,
 		Check,
 		CheckAll,
 		Delete,
 		NcButton,
+		NcDialog,
 		NcEmptyContent,
 		NcLoadingIcon,
 		NcProgressBar,
@@ -198,6 +278,17 @@ export default {
 			type: String,
 			required: true,
 		},
+
+		/** Open with the photos already judged in the deck too, to go over them again. */
+		showJudged: {
+			type: Boolean,
+			default: false,
+		},
+
+		timeZone: {
+			type: String,
+			default: null,
+		},
 	},
 
 	emits: ['back', 'changed'],
@@ -207,15 +298,25 @@ export default {
 			items: [],
 			index: 0,
 			loading: true,
+			loadFailed: false,
+			/** Whether the deck on screen includes photos that already had a verdict. */
+			showingJudged: this.showJudged,
 			playing: false,
 			kept: 0,
 			deleted: 0,
-			/** Verdicts given this session, newest last — this is what undo walks back. */
+			/**
+			 * Verdicts given this session, newest last — this is what undo walks back.
+			 * Always the same photos, in the same order, as items[0..index).
+			 */
 			history: [],
 			dragging: false,
 			dragX: 0,
 			pointerId: null,
 			startX: 0,
+			/** Verdicts a reset would clear, while its confirmation is open; else null. */
+			resetCount: null,
+			announcement: '',
+			shortcutsOff: Boolean(window.OCP?.Accessibility?.disableKeyboardShortcuts?.()),
 			DECK_SIZE,
 		}
 	},
@@ -264,10 +365,20 @@ export default {
 		},
 
 		summaryText() {
-			return t('photosweep', 'Kept {kept}, marked {deleted} for deletion.', {
-				kept: this.kept,
-				deleted: this.deleted,
+			return t('photosweep', '{kept}, {deleted}.', {
+				kept: n('photosweep', 'Kept %n', 'Kept %n', this.kept),
+				deleted: n('photosweep', 'marked %n for deletion', 'marked %n for deletion', this.deleted),
 			})
+		},
+
+		resetMessage() {
+			return n(
+				'photosweep',
+				'This removes the verdict on %n photo in {month}, including a mark for deletion if it has one. It comes back up for review. Nothing on disk changes.',
+				'This removes the verdicts on %n photos in {month}, including any marks for deletion. They come back up for review. Nothing on disk changes.',
+				this.resetCount ?? 0,
+				{ month: monthLabel(this.month) },
+			)
 		},
 	},
 
@@ -281,15 +392,23 @@ export default {
 		// garbage-collect an in-flight decode, and making them reactive would have
 		// Vue walk an Image object on every swipe for nothing.
 		this.prefetched = new Map()
+
+		// The last request still out for each file, so a verdict, its undo and a
+		// fresh verdict reach the server in the order they were given.
+		this.inFlight = new Map()
+
+		// Registered here, before the month has loaded, so leaving mid-load cannot
+		// strand a listener on a deck that no longer exists. onKey ignores keys
+		// until there is something to judge.
+		this.stopHotKeys = useHotKey((event) => isDeckKey(event) && this.acceptsKey(event), this.onKey, { prevent: true })
 	},
 
 	async mounted() {
-		await this.load()
-		window.addEventListener('keydown', this.onKey)
+		await this.load(this.showJudged ? false : null)
 	},
 
 	beforeUnmount() {
-		window.removeEventListener('keydown', this.onKey)
+		this.stopHotKeys()
 	},
 
 	methods: {
@@ -334,6 +453,10 @@ export default {
 			}
 		},
 
+		/**
+		 * @param {boolean|null} skipDecided false to include photos already judged,
+		 *                                   null for the user's setting
+		 */
 		async load(skipDecided = null) {
 			this.loading = true
 			try {
@@ -343,33 +466,109 @@ export default {
 				this.history = []
 				this.kept = 0
 				this.deleted = 0
+				this.showingJudged = skipDecided === false
+				this.loadFailed = false
 			} catch {
-				showError(t('photosweep', 'Could not open that month'))
+				// Its own state with a retry, rather than a toast over an empty deck:
+				// an empty deck says "nothing left in this month", which is not true.
+				this.loadFailed = true
 			} finally {
 				this.loading = false
 			}
 		},
 
+		/**
+		 * Goes over the month again with every photo in it, verdicts and all.
+		 *
+		 * Nothing is cleared. Judging a photo again replaces its verdict, and leaving
+		 * one alone keeps the verdict it had.
+		 */
 		async reviewAgain() {
-			await api.resetMonth(this.month)
 			await this.load(false)
+		},
+
+		/** Counts what a reset would clear, and asks before clearing it. */
+		async askReset() {
+			let count
+			try {
+				// Every indexed photo in the month, less the ones without a verdict.
+				const [all, open] = await Promise.all([
+					api.month(this.month, false),
+					api.month(this.month, true),
+				])
+				count = all.items.length - open.items.length
+			} catch {
+				showError(t('photosweep', 'Could not check this month'))
+				return
+			}
+			if (count <= 0) {
+				showInfo(t('photosweep', 'No photo in this month has a verdict to clear.'))
+				return
+			}
+			this.resetCount = count
+		},
+
+		async reset() {
+			this.resetCount = null
+			try {
+				await api.resetMonth(this.month)
+			} catch {
+				showError(t('photosweep', 'Could not clear this month’s verdicts'))
+				return
+			}
 			this.$emit('changed')
+			await this.load(this.showingJudged ? false : null)
+		},
+
+		/**
+		 * Whether the deck has a use for this key right now. A key it would ignore
+		 * keeps its default, so the arrows still scroll while the month loads.
+		 *
+		 * @param {KeyboardEvent} event one of the deck's keys
+		 * @return {boolean}
+		 */
+		acceptsKey(event) {
+			if (this.loading || this.resetCount !== null) {
+				return false
+			}
+			if (event.key.toLowerCase() === 'z') {
+				// Also on the finished screen, where there is no current photo but the
+				// last verdict can still be taken back.
+				return this.history.length > 0
+			}
+			return this.current !== null
 		},
 
 		onKey(event) {
-			if (this.loading || !this.current || event.metaKey || event.ctrlKey) {
-				return
-			}
-			if (event.key === 'ArrowLeft') {
-				event.preventDefault()
-				this.decide('delete')
-			} else if (event.key === 'ArrowRight') {
-				event.preventDefault()
-				this.decide('keep')
-			} else if (event.key === 'z' && this.history.length) {
-				event.preventDefault()
+			if (event.key.toLowerCase() === 'z') {
 				this.undo()
+			} else {
+				this.decide(event.key === 'ArrowLeft' ? 'delete' : 'keep')
 			}
+		},
+
+		/**
+		 * Runs one server call for a file once whatever is still out for it is done.
+		 *
+		 * Without this an undo could overtake the verdict it takes back: the server
+		 * would drop a verdict that did not exist yet and then store it, and the photo
+		 * would stay marked while the deck showed it undone.
+		 *
+		 * @param {number} fileId the file
+		 * @param {() => Promise<void>} task makes the request
+		 * @return {Promise} the task's own outcome
+		 */
+		enqueue(fileId, task) {
+			const previous = this.inFlight.get(fileId) ?? Promise.resolve()
+			const run = previous.then(task)
+			const settled = run.then(() => {}, () => {})
+			this.inFlight.set(fileId, settled)
+			settled.then(() => {
+				if (this.inFlight.get(fileId) === settled) {
+					this.inFlight.delete(fileId)
+				}
+			})
+			return run
 		},
 
 		/**
@@ -377,7 +576,7 @@ export default {
 		 *
 		 * The deck advances first and the request follows, because waiting on the
 		 * network between every photo is what makes going through a thousand of them
-		 * unbearable. A failure is surfaced and the item is put back.
+		 * unbearable. A failure is surfaced and that photo is put back.
 		 *
 		 * @param {string} verdict "keep" or "delete"
 		 */
@@ -390,37 +589,97 @@ export default {
 			this.index += 1
 			this.playing = false
 			this.dragX = 0
-			this.history.push({ item, verdict })
-			if (verdict === 'keep') {
-				this.kept += 1
-			} else {
-				this.deleted += 1
-			}
+			const entry = { item, verdict, saved: false }
+			this.history.push(entry)
+			this.count(verdict, 1)
+			this.announce(verdict === 'keep'
+				? t('photosweep', 'Kept {name}', { name: item.name }, undefined, PLAIN)
+				: t('photosweep', 'Marked {name} for deletion', { name: item.name }, undefined, PLAIN))
 
 			try {
-				await api.record(item.fileId, verdict)
+				await this.enqueue(item.fileId, async () => {
+					await api.record(item.fileId, verdict)
+					// Set inside the queued task, so an undo queued behind it is
+					// guaranteed to see it.
+					entry.saved = true
+				})
 				this.$emit('changed')
 			} catch {
-				showError(t('photosweep', 'Could not save that decision'))
-				this.stepBack()
+				this.dropFailed(entry)
 			}
+		},
+
+		/**
+		 * Takes back exactly the verdict whose save failed, wherever it is by now.
+		 *
+		 * Not simply the last one: by the time a request fails the deck has usually
+		 * moved on, and rolling back the newest verdict would undo a photo that saved
+		 * fine while leaving the failed one looking marked.
+		 *
+		 * @param {object} entry the history entry that could not be saved
+		 */
+		dropFailed(entry) {
+			const at = this.history.indexOf(entry)
+			if (at === -1) {
+				// Already undone, or the deck was reloaded. Either way nothing on
+				// screen claims this verdict any more, which is the truth.
+				return
+			}
+			showError(t('photosweep', 'Could not save that decision'))
+			this.history.splice(at, 1)
+			this.count(entry.verdict, -1)
+
+			// Bring the photo back as the current card. The judged part of the deck
+			// stays exactly the photos in history, which is what undo relies on.
+			const from = this.items.indexOf(entry.item)
+			if (from !== -1 && from < this.index) {
+				this.items.splice(from, 1)
+				this.items.splice(this.index - 1, 0, entry.item)
+				this.index -= 1
+			}
+			this.playing = false
 		},
 
 		async undo() {
-			const last = this.history[this.history.length - 1]
-			if (!last) {
+			const entry = this.history[this.history.length - 1]
+			if (!entry) {
 				return
 			}
 			this.stepBack()
+			this.announce(t('photosweep', 'Took back the verdict on {name}', { name: entry.item.name }, undefined, PLAIN))
 			try {
-				await api.undo(last.item.fileId)
+				await this.enqueue(entry.item.fileId, async () => {
+					// A save that failed left nothing on the server to take back.
+					if (entry.saved) {
+						await api.undo(entry.item.fileId)
+					}
+				})
 				this.$emit('changed')
 			} catch {
 				showError(t('photosweep', 'Could not undo that'))
+				this.restoreEntry(entry)
 			}
 		},
 
-		/** Reverses the local bookkeeping of one verdict, without calling the server. */
+		/**
+		 * Puts a verdict back after its undo failed, since the server still holds it.
+		 *
+		 * Only when the photo is still the one on screen and has not been judged again
+		 * meanwhile; otherwise the newer verdict is the one that counts.
+		 *
+		 * @param {object} entry the history entry the undo removed
+		 */
+		restoreEntry(entry) {
+			if (this.items[this.index] !== entry.item || this.history.some((e) => e.item === entry.item)) {
+				return
+			}
+			this.history.push(entry)
+			this.index += 1
+			this.playing = false
+			this.count(entry.verdict, 1)
+		},
+
+		/** Reverses the local bookkeeping of the newest verdict, without calling the server. */
 		stepBack() {
 			const last = this.history.pop()
 			if (!last) {
@@ -428,11 +687,28 @@ export default {
 			}
 			this.index = Math.max(0, this.index - 1)
 			this.playing = false
-			if (last.verdict === 'keep') {
-				this.kept = Math.max(0, this.kept - 1)
+			this.count(last.verdict, -1)
+		},
+
+		/**
+		 * @param {string} verdict "keep" or "delete"
+		 * @param {number} delta 1 or -1
+		 */
+		count(verdict, delta) {
+			if (verdict === 'keep') {
+				this.kept = Math.max(0, this.kept + delta)
 			} else {
-				this.deleted = Math.max(0, this.deleted - 1)
+				this.deleted = Math.max(0, this.deleted + delta)
 			}
+		},
+
+		/**
+		 * Says what just happened, for screen readers.
+		 *
+		 * @param {string} text the announcement
+		 */
+		announce(text) {
+			this.announcement = text
 		},
 
 		onPointerDown(event) {
@@ -478,6 +754,25 @@ export default {
 			} else if (travelled >= COMMIT_DISTANCE) {
 				this.decide('keep')
 			}
+		},
+
+		/**
+		 * The browser took the gesture away: palm rejection, a system swipe, the
+		 * screen rotating. That is not the user letting go, so the card goes back
+		 * and nothing is recorded, however far it had travelled.
+		 *
+		 * @param {PointerEvent} event the cancellation
+		 */
+		onPointerCancel(event) {
+			if (!this.dragging) {
+				return
+			}
+			if (event.pointerId === this.pointerId) {
+				event.currentTarget.releasePointerCapture?.(event.pointerId)
+			}
+			this.dragging = false
+			this.dragX = 0
+			this.pointerId = null
 		},
 	},
 }
@@ -635,6 +930,13 @@ export default {
 	max-width: 560px;
 	width: 100%;
 	margin: 0 auto;
+}
+
+.pc-deck__choices {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 8px;
 }
 
 .pc-deck__hint {

@@ -105,22 +105,31 @@ export default {
 	data() {
 		return {
 			local: { ...this.config },
-			timer: null,
 		}
 	},
 
 	watch: {
 		config: {
 			handler(value) {
-				this.local = { ...value }
+				// A save answers with every setting, including one still being typed
+				// into. What is typed wins until it has been saved in its turn.
+				this.local = { ...value, ...this.unsaved }
 			},
 
 			deep: true,
 		},
 	},
 
+	created() {
+		// Per setting, so a change to one never cancels the pending save of another.
+		// Not reactive: nothing on screen depends on them.
+		this.unsaved = {}
+		this.timers = {}
+	},
+
 	beforeUnmount() {
-		clearTimeout(this.timer)
+		// Leaving the screen is not a reason to drop what was typed.
+		this.flush()
 	},
 
 	methods: {
@@ -138,10 +147,31 @@ export default {
 		 */
 		set(key, value) {
 			this.local = { ...this.local, [key]: value }
-			clearTimeout(this.timer)
-			const patch = { [key]: value }
+			this.unsaved[key] = value
+			clearTimeout(this.timers[key])
 			const delay = typeof value === 'string' ? 700 : 0
-			this.timer = setTimeout(() => this.$emit('save', patch), delay)
+			this.timers[key] = setTimeout(() => this.flush(key), delay)
+		},
+
+		/**
+		 * Saves what is waiting, for one setting or all of them.
+		 *
+		 * @param {string|null} only the setting to save, or null for every one
+		 */
+		flush(only = null) {
+			const keys = only === null ? Object.keys(this.unsaved) : [only]
+			const patch = {}
+			for (const key of keys) {
+				clearTimeout(this.timers[key])
+				delete this.timers[key]
+				if (key in this.unsaved) {
+					patch[key] = this.unsaved[key]
+					delete this.unsaved[key]
+				}
+			}
+			if (Object.keys(patch).length) {
+				this.$emit('save', patch)
+			}
 		},
 	},
 }

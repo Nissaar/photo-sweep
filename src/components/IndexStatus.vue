@@ -5,23 +5,25 @@
 
 <template>
 	<div class="pc-index">
-		<div v-if="scan.running" class="pc-index__line">
+		<div v-if="scanning" class="pc-index__line">
 			<NcLoadingIcon :size="16" />
-			<span>{{ t('photosweep', 'Indexing — {found} so far', { found: scan.found }) }}</span>
+			<span>{{ n('photosweep', 'Indexing — %n photo so far', 'Indexing — %n photos so far', scan.found) }}</span>
 		</div>
 		<div v-else class="pc-index__line">
 			<span>{{ indexedLabel }}</span>
 		</div>
 
-		<p v-if="scan.error" class="pc-index__error">
-			{{ scan.error }}
+		<!-- The server's own error text can be an exception message with paths in
+		     it. It is in the server log; this line only says that something broke. -->
+		<p v-if="scan.error && !scanning" class="pc-index__error">
+			{{ t('photosweep', 'The last scan stopped because of an error. Try again, or ask your administrator to check the server log.') }}
 		</p>
 
 		<div class="pc-index__actions">
-			<NcButton variant="tertiary" :disabled="scan.running" @click="$emit('scan')">
+			<NcButton variant="tertiary" :disabled="scanning" @click="$emit('scan')">
 				{{ t('photosweep', 'Check for new photos') }}
 			</NcButton>
-			<NcButton variant="tertiary" :disabled="scan.running" @click="$emit('rebuild')">
+			<NcButton variant="tertiary" :disabled="scanning" @click="$emit('rebuild')">
 				{{ t('photosweep', 'Rebuild index') }}
 			</NcButton>
 		</div>
@@ -47,6 +49,17 @@ export default {
 		summary: {
 			type: Object,
 			required: true,
+		},
+
+		/**
+		 * Whether a scan is under way, as the app knows it.
+		 *
+		 * Not `scan.running`: the server sets and clears that inside one request,
+		 * so every answer the browser sees says false and the spinner never showed.
+		 */
+		scanning: {
+			type: Boolean,
+			default: false,
 		},
 	},
 
