@@ -24,6 +24,14 @@ class TimelineService {
 
 	private const MONTH_PATTERN = '/^\d{4}-(0[1-9]|1[0-2])$/';
 
+	/**
+	 * Most items one month's deck returns. A phone dump can put ten thousand photos
+	 * in one month, and every one of them is a JSON object and, on the client, a
+	 * card. Nobody judges that many in a sitting; with judged photos skipped, the
+	 * next opening picks up where this one ran out.
+	 */
+	public const MONTH_LIMIT = 2000;
+
 	public function __construct(
 		private MediaMapper $mediaMapper,
 		private DecisionMapper $decisionMapper,
@@ -46,10 +54,11 @@ class TimelineService {
 
 		$months = [];
 		foreach ($totals as $month => $total) {
-			// Applied verdicts count as reviewed but their files have left the index,
-			// so the reviewed tally can legitimately exceed what is still there. Clamp
-			// it, or a finished month reports 40 of 12 reviewed.
-			$done = min($reviewed[$month] ?? 0, $total);
+			// Only verdicts on photos still in this month's index are counted, so this
+			// cannot exceed the total. An applied delete has left the index and no
+			// longer counts, which is what keeps a month with unjudged photos in it
+			// from being reported as done.
+			$done = $reviewed[$month] ?? 0;
 			$months[] = [
 				'month' => $month,
 				'total' => $total,
@@ -72,17 +81,19 @@ class TimelineService {
 			throw new \InvalidArgumentException('Expected a month like 2024-07');
 		}
 
-		$items = $this->mediaMapper->findForMonth($userId, $yearMonth);
 		$skip = $skipDecided ?? $this->configService->getSkipDecided($userId);
 		if (!$skip) {
-			return $items;
+			return $this->mediaMapper->findForMonth($userId, $yearMonth, self::MONTH_LIMIT);
 		}
 
+		// Filtered before the limit, not after: otherwise a month whose first few
+		// thousand photos had all been judged would come back empty with photos left.
+		$items = $this->mediaMapper->findForMonth($userId, $yearMonth);
 		$decided = array_flip($this->decisionMapper->decidedFileIdsForMonth($userId, $yearMonth));
-		return array_values(array_filter(
+		return array_slice(array_values(array_filter(
 			$items,
 			static fn (Media $m): bool => !isset($decided[$m->getFileId()]),
-		));
+		)), 0, self::MONTH_LIMIT);
 	}
 
 	/**
