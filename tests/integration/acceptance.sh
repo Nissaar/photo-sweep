@@ -13,7 +13,8 @@
 #
 #   Usage: tests/integration/acceptance.sh [nextcloud-version] [port]
 #
-# Set DOCKER=sudo\ docker where the daemon needs it.
+# Set DOCKER=sudo\ docker where the daemon needs it. On failure the server's log is
+# copied to LOG_DIR (default build/integration-logs) before the container goes.
 
 set -uo pipefail
 
@@ -23,6 +24,7 @@ CT="photosweep-accept-$VERSION"
 DOCKER="${DOCKER:-docker}"
 ADMIN_PASS="acceptance-pass-123"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LOG_DIR="${LOG_DIR:-$ROOT/build/integration-logs}"
 
 B="http://localhost:$PORT/ocs/v2.php/apps/photosweep/api/v1"
 A=(-u "admin:$ADMIN_PASS" -H OCS-APIRequest:true -H Accept:application/json -H Content-Type:application/json -s)
@@ -40,7 +42,21 @@ meta() { python3 -c "import json,sys; print(json.load(sys.stdin)['ocs']['meta'][
 sql()  { $DOCKER exec "$CT" php -r "\$d=new PDO('sqlite:/var/www/html/data/nextcloud.db'); echo \$d->query(\"$1\")->fetchColumn();"; }
 
 cleanup() { $DOCKER rm -f "$CT" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+
+# The container, and the log with it, is gone once this script exits, so whatever
+# looks at a failed run afterwards (CI uploads LOG_DIR) needs a copy taken first.
+# shellcheck disable=SC2329  # invoked by the trap below
+on_exit() {
+  local status=$?
+  if [ "$status" -ne 0 ]; then
+    mkdir -p "$LOG_DIR"
+    $DOCKER cp "$CT:/var/www/html/data/nextcloud.log" "$LOG_DIR/nextcloud-$VERSION.log" >/dev/null 2>&1 \
+      && echo "Server log copied to $LOG_DIR/nextcloud-$VERSION.log"
+    $DOCKER logs "$CT" >"$LOG_DIR/container-$VERSION.log" 2>&1 || true
+  fi
+  cleanup
+}
+trap on_exit EXIT
 
 step "0. Start a clean Nextcloud $VERSION"
 cleanup
@@ -99,7 +115,7 @@ for f in "$FIXTURES"/*; do
 done
 rm -rf "$FIXTURES"
 $DOCKER exec "$CT" chown -R www-data:www-data /var/www/html/data/admin/files/Photos
-occ files:scan admin >/dev/null && ok "files:scan"
+OUT=$(occ files:scan admin) && ok "files:scan" || bad "files:scan — $OUT"
 
 step "4. Index the library"
 OUT=$(occ photosweep:index admin --until-complete)

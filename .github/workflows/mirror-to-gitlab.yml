@@ -13,12 +13,19 @@ concurrency:
 
 jobs:
   mirror:
+    # Dependabot's pushes run without repository secrets, so the guard below would
+    # fail every one of them. Its branches reach GitLab with the next ordinary push.
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
+      # Both tokens travel as HTTP headers set through git's environment config, never
+      # in a URL or an argument, so they cannot show up in a process listing or in
+      # git's own error messages about a remote.
       - name: Mirror all branches and tags to GitLab
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
           GITLAB_PROJECT: ${{ vars.GITLAB_PROJECT }}
         run: |
@@ -27,10 +34,19 @@ jobs:
             echo "::error::GITLAB_TOKEN secret or GITLAB_PROJECT variable is not set"
             exit 1
           fi
-          git clone --mirror \
-            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
-            source.git
+          GITHUB_AUTH=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
+          GITLAB_AUTH=$(printf 'oauth2:%s' "$GITLAB_TOKEN" | base64 -w0)
+          echo "::add-mask::$GITHUB_AUTH"
+          echo "::add-mask::$GITLAB_AUTH"
+
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic $GITHUB_AUTH"
+          export GIT_CONFIG_KEY_1=http.https://gitlab.com/.extraheader
+          export GIT_CONFIG_VALUE_1="Authorization: Basic $GITLAB_AUTH"
+
+          git clone --mirror "https://github.com/${GITHUB_REPOSITORY}.git" source.git
           cd source.git
           git push --prune \
-            "https://oauth2:${GITLAB_TOKEN}@gitlab.com/${GITLAB_PROJECT}.git" \
+            "https://gitlab.com/${GITLAB_PROJECT}.git" \
             '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
