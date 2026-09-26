@@ -35,11 +35,14 @@ the deck instant — waiting for a round trip between every photo is what makes 
 through a thousand of them unbearable — and it means a train tunnel does not end a
 review session.
 
-The queue survives the process being killed, is sent in a single batch when the
-connection comes back, and a later verdict for the same photo replaces an earlier one
-rather than sending both. The review screen drains it before showing the list, and
+The queue survives the process being killed, is sent in batches when the connection
+comes back, and a later verdict for the same photo replaces an earlier one rather than
+sending both. Undo and "keep this one after all" go through the same queue, so they
+hold while offline too. Each entry belongs to the account that gave it and is only
+ever sent for that account. The review screen drains it before showing the list, and
 says so if anything is still waiting, so you are never asked to confirm a list that is
-quietly missing what you just marked.
+quietly missing what you just marked. Confirming sends the server exactly the photos
+on that list, and nothing else that happens to be pending.
 
 ## Permissions
 
@@ -62,7 +65,7 @@ Other measures:
 |---|---|
 | App password encrypted with AES-256-GCM under a Keystore key | `data/AccountStore.kt` |
 | `FLAG_SECURE` — no screenshots, screen recording or recents thumbnail | `MainActivity.kt` |
-| Optional biometric / device-credential lock | `MainActivity.maybePromptUnlock` |
+| Optional biometric / device-credential lock, asked again after 10 s in the background | `MainActivity.checkLock` |
 | Cleartext refused; **user-installed CAs not trusted**, defeating proxy interception | `res/xml/network_security_config.xml` |
 | No cloud backup, no device-to-device transfer | `res/xml/data_extraction_rules.xml` |
 | Logging stripped from release builds | `proguard-rules.pro` |

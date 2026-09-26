@@ -7,6 +7,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.annotation.OptIn
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -51,12 +54,25 @@ fun VideoPlayer(url: String, modifier: Modifier = Modifier) {
             }
     }
 
-    DisposableEffect(player) {
-        onDispose { player.release() }
+    // Paused when the app goes to the background. Without this, going home or
+    // turning the screen off left the clip's sound playing to nobody.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(player, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) player.pause()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            player.release()
+        }
     }
 
     AndroidView(
         modifier = modifier,
+        // The view is detached from the player before it goes, so it does not keep
+        // drawing into, or holding on to, a player that has been released.
+        onRelease = { view -> view.player = null },
         factory = { ctx ->
             PlayerView(ctx).apply {
                 this.player = player

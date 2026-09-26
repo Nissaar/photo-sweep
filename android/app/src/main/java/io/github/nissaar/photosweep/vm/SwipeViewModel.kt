@@ -2,6 +2,7 @@ package io.github.nissaar.photosweep.vm
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,12 +47,18 @@ class SwipeViewModel : ViewModel() {
 
     private var job: Job? = null
 
+    /**
+     * Deals the month's deck, every time it is opened.
+     *
+     * A deck kept from an earlier visit goes stale: reopened on the grid, reviewed on
+     * the web, or simply finished, it went on saying "Month finished" or dealing
+     * photos that already had a verdict.
+     */
     fun load(month: String) {
-        if (_state.value.month == month && _state.value.items.isNotEmpty()) return
         startLoad(month)
     }
 
-    /** Forgets this month's verdicts and deals the deck again. */
+    /** Forgets this month's verdicts and deals the deck again. Confirmed upstream. */
     fun reviewAgain() {
         val month = _state.value.month ?: return
         startLoad(month, resetFirst = true)
@@ -65,6 +72,9 @@ class SwipeViewModel : ViewModel() {
                 if (resetFirst) Graph.repository.resetMonth(month)
                 val response = Graph.repository.month(month, skipDecided = if (resetFirst) false else null)
                 _state.value = _state.value.copy(items = response.items, loading = false, index = 0)
+            } catch (e: CancellationException) {
+                // Replaced by a newer load, which owns the state now.
+                throw e
             } catch (e: Exception) {
                 _state.value = _state.value.copy(
                     loading = false,
