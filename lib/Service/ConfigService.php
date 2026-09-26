@@ -10,7 +10,12 @@ declare(strict_types=1);
 namespace OCA\PhotoSweep\Service;
 
 use OCA\PhotoSweep\AppInfo\Application;
+use OCP\Files\Folder;
+use OCP\Files\IRootFolder;
+use OCP\Files\Node;
+use OCP\Files\NotFoundException;
 use OCP\IConfig;
+use OCP\IL10N;
 
 /**
  * How a DELETE verdict is carried out.
@@ -49,19 +54,14 @@ class ConfigService {
 
 	public function __construct(
 		private IConfig $config,
+		private IRootFolder $rootFolder,
+		private IL10N $l10n,
 	) {
 	}
 
 	public function getMode(string $userId): string {
 		$mode = $this->config->getUserValue($userId, Application::APP_ID, self::KEY_MODE, CleanupMode::TRASH);
 		return CleanupMode::isValid($mode) ? $mode : CleanupMode::TRASH;
-	}
-
-	public function setMode(string $userId, string $mode): void {
-		if (!CleanupMode::isValid($mode)) {
-			throw new \InvalidArgumentException('Unknown cleanup mode: ' . $mode);
-		}
-		$this->config->setUserValue($userId, Application::APP_ID, self::KEY_MODE, $mode);
 	}
 
 	/** Where folder-mode puts condemned files. */
@@ -72,15 +72,7 @@ class ConfigService {
 			self::KEY_TARGET_FOLDER,
 			self::DEFAULT_TARGET_FOLDER,
 		);
-		return $this->normalisePath($path, self::DEFAULT_TARGET_FOLDER);
-	}
-
-	public function setTargetFolder(string $userId, string $path): void {
-		$normalised = $this->normalisePath($path, self::DEFAULT_TARGET_FOLDER);
-		if ($normalised === '/') {
-			throw new \InvalidArgumentException('The target folder cannot be the root of your files');
-		}
-		$this->config->setUserValue($userId, Application::APP_ID, self::KEY_TARGET_FOLDER, $normalised);
+		return $this->normaliseStored($path, self::DEFAULT_TARGET_FOLDER);
 	}
 
 	/** Which part of the user's files gets indexed. */
@@ -91,16 +83,7 @@ class ConfigService {
 			self::KEY_SOURCE_FOLDER,
 			self::DEFAULT_SOURCE_FOLDER,
 		);
-		return $this->normalisePath($path, self::DEFAULT_SOURCE_FOLDER);
-	}
-
-	public function setSourceFolder(string $userId, string $path): void {
-		$this->config->setUserValue(
-			$userId,
-			Application::APP_ID,
-			self::KEY_SOURCE_FOLDER,
-			$this->normalisePath($path, self::DEFAULT_SOURCE_FOLDER),
-		);
+		return $this->normaliseStored($path, self::DEFAULT_SOURCE_FOLDER);
 	}
 
 	/** Hide items you have already judged when a month is reopened. */
@@ -108,8 +91,61 @@ class ConfigService {
 		return $this->config->getUserValue($userId, Application::APP_ID, self::KEY_SKIP_DECIDED, '1') === '1';
 	}
 
-	public function setSkipDecided(string $userId, bool $value): void {
-		$this->config->setUserValue($userId, Application::APP_ID, self::KEY_SKIP_DECIDED, $value ? '1' : '0');
+	/**
+	 * Changes whichever settings are given, all of them or none.
+	 *
+	 * Everything is checked before anything is written. Saving the mode and then
+	 * refusing the folder would leave the user in folder mode with a folder they were
+	 * just told was not accepted — and the client, seeing an error, would believe
+	 * nothing had changed.
+	 *
+	 * @throws \InvalidArgumentException with a message fit to show the user
+	 */
+	public function update(
+		string $userId,
+		?string $mode = null,
+		?string $targetFolder = null,
+		?string $sourceFolder = null,
+		?bool $skipDecided = null,
+	): void {
+		if ($mode !== null && !CleanupMode::isValid($mode)) {
+			throw new \InvalidArgumentException($this->l10n->t('Unknown cleanup mode'));
+		}
+
+		$target = $targetFolder === null
+			? $this->getTargetFolder($userId)
+			: $this->normaliseInput($targetFolder, self::DEFAULT_TARGET_FOLDER);
+		$source = $sourceFolder === null
+			? $this->getSourceFolder($userId)
+			: $this->normaliseInput($sourceFolder, self::DEFAULT_SOURCE_FOLDER);
+
+		if ($targetFolder !== null) {
+			if ($target === '/') {
+				throw new \InvalidArgumentException($this->l10n->t('The collection folder cannot be the root of your files'));
+			}
+			if (!$this->isOwnLocation($userId, $target)) {
+				throw new \InvalidArgumentException($this->l10n->t('The collection folder has to be in your own files, not in a folder shared with you, a group folder or external storage'));
+			}
+		}
+
+		// The collection folder is left out of the index. If it were the photo folder,
+		// or held it, the whole library would disappear from the grid.
+		if (($targetFolder !== null || $sourceFolder !== null) && self::contains($target, $source)) {
+			throw new \InvalidArgumentException($this->l10n->t('The collection folder cannot be your photo folder or a folder that contains it'));
+		}
+
+		if ($mode !== null) {
+			$this->config->setUserValue($userId, Application::APP_ID, self::KEY_MODE, $mode);
+		}
+		if ($targetFolder !== null) {
+			$this->config->setUserValue($userId, Application::APP_ID, self::KEY_TARGET_FOLDER, $target);
+		}
+		if ($sourceFolder !== null) {
+			$this->config->setUserValue($userId, Application::APP_ID, self::KEY_SOURCE_FOLDER, $source);
+		}
+		if ($skipDecided !== null) {
+			$this->config->setUserValue($userId, Application::APP_ID, self::KEY_SKIP_DECIDED, $skipDecided ? '1' : '0');
+		}
 	}
 
 	/**
@@ -154,18 +190,78 @@ class ConfigService {
 	}
 
 	/**
-	 * Forces a user-supplied path into the shape the Files API expects: leading slash,
-	 * no trailing slash, no traversal.
+	 * Whether [$outer] is [$inner] or one of its parents.
 	 */
-	private function normalisePath(string $path, string $fallback): string {
+	private static function contains(string $outer, string $inner): bool {
+		if ($outer === '/') {
+			return true;
+		}
+		return $inner === $outer || str_starts_with($inner . '/', $outer . '/');
+	}
+
+	/**
+	 * Whether a folder at [$path] would be on the user's own storage.
+	 *
+	 * The folder may not exist yet — applying creates it — so the question goes to
+	 * the nearest part of the path that does. Anything below a share or a group folder
+	 * is on that storage too, and moving photos there hands them to someone else.
+	 */
+	private function isOwnLocation(string $userId, string $path): bool {
+		$userFolder = $this->rootFolder->getUserFolder($userId);
+		$node = $this->nearestExisting($userFolder, $path);
+		return OwnFiles::isOwn($node, $userId);
+	}
+
+	private function nearestExisting(Folder $userFolder, string $path): Node {
+		while ($path !== '/' && $path !== '') {
+			try {
+				return $userFolder->get($path);
+			} catch (NotFoundException $e) {
+				$path = dirname($path);
+			}
+		}
+		return $userFolder;
+	}
+
+	/**
+	 * A path as typed by the user, in the shape the Files API expects: leading slash,
+	 * no trailing slash, no empty or "." segments.
+	 *
+	 * A ".." segment is refused rather than resolved or silently replaced by the
+	 * default: the user asked for something specific, and quietly saving something
+	 * else while reporting success is how photos end up where nobody expects them.
+	 * Only a whole segment counts — "My..Photos" is a perfectly good folder name.
+	 *
+	 * @throws \InvalidArgumentException
+	 */
+	private function normaliseInput(string $path, string $fallback): string {
 		$path = trim($path);
 		if ($path === '') {
 			return $fallback;
 		}
-		$path = '/' . trim(str_replace('\\', '/', $path), '/');
-		if (str_contains($path, '..')) {
+		$segments = [];
+		foreach (explode('/', str_replace('\\', '/', $path)) as $segment) {
+			if ($segment === '' || $segment === '.') {
+				continue;
+			}
+			if ($segment === '..') {
+				throw new \InvalidArgumentException($this->l10n->t('A folder path cannot contain ".."'));
+			}
+			$segments[] = $segment;
+		}
+		return '/' . implode('/', $segments);
+	}
+
+	/**
+	 * The same shape for a value read back from storage, which should already be
+	 * clean. Anything that is not — written by an older version, or by hand with
+	 * `occ` — falls back to the default rather than failing a scan.
+	 */
+	private function normaliseStored(string $path, string $fallback): string {
+		try {
+			return $this->normaliseInput($path, $fallback);
+		} catch (\InvalidArgumentException $e) {
 			return $fallback;
 		}
-		return $path;
 	}
 }

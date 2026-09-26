@@ -10,7 +10,6 @@ declare(strict_types=1);
 namespace OCA\PhotoSweep\Service;
 
 use OCP\App\IAppManager;
-use OCP\IUser;
 use OCP\IUserManager;
 use OCP\Server;
 use Psr\Log\LoggerInterface;
@@ -96,6 +95,13 @@ class TrashService {
 					'app' => 'photosweep',
 				]);
 			}
+			// The trash manager has no lookup by id, so the root listing is the only
+			// way in. Stopping once everything asked for has been seen at least keeps
+			// the walk short on a trash with years of other deletions in it.
+			unset($wanted[$id]);
+			if ($wanted === []) {
+				break;
+			}
 		}
 
 		return $restored;
@@ -120,12 +126,5 @@ class TrashService {
 		}
 		$id = $item->getId();
 		return is_int($id) ? $id : null;
-	}
-
-	/**
-	 * @return IUser|null
-	 */
-	public function user(string $userId): ?IUser {
-		return $this->userManager->get($userId);
 	}
 }

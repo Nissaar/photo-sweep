@@ -51,23 +51,29 @@ class MediaFinder {
 	}
 
 	/**
-	 * One page of media, ordered by file id ascending.
+	 * The next page of media after a cursor, ordered by modification time and then
+	 * file id.
 	 *
-	 * Paged by offset rather than by a "file id greater than" cursor, which would be
-	 * the sturdier choice: Nextcloud's file search only accepts `eq` and `in` on
-	 * `fileid`, so a keyset cursor is not expressible through it at all. Ordering by
-	 * file id still makes the offset about as stable as an offset can be — new uploads
-	 * take higher ids and land past the window rather than shifting it — and a scan is
-	 * finished off by a sweep that drops anything the pass did not touch, so the
-	 * remaining risk is that a file deleted mid-scan lets one other file slip past
-	 * this pass. The next complete pass picks it up.
+	 * Paged by a keyset rather than an offset. An offset counts rows, so every file
+	 * deleted mid-scan — this app deleting three hundred, say — shifts the window and
+	 * lets as many unrelated files slip past the pass, which then purges them as stale.
+	 * A cursor names the last file seen, and deletions behind it change nothing.
 	 *
-	 * @return File[]
+	 * The key is (mtime, file id) because Nextcloud's file search accepts range
+	 * comparisons on mtime but only `eq` and `in` on fileid. The query asks for
+	 * everything from the cursor's mtime onwards, and the files at exactly that mtime
+	 * which the cursor has already passed are dropped here, by file id.
+	 *
+	 * A file modified mid-scan moves ahead of the cursor and is simply met again
+	 * later in the same pass, which is harmless.
+	 *
+	 * @param int $afterFileId 0 to start from the beginning
+	 * @return File[] empty only when the pass has reached the end
 	 */
-	public function findBatch(Folder $scope, int $offset, int $limit): array {
+	public function findBatch(Folder $scope, int $afterMtime, int $afterFileId, int $limit): array {
 		if (class_exists(SearchQuery::class)) {
 			try {
-				return $this->searchPaged($scope, $offset, $limit);
+				return $this->searchPaged($scope, $afterMtime, $afterFileId, $limit);
 			} catch (\Throwable $e) {
 				$this->logger->warning('Paged media search failed, falling back to searchByMime', [
 					'exception' => $e,
@@ -75,13 +81,13 @@ class MediaFinder {
 				]);
 			}
 		}
-		return $this->searchByMimeFallback($scope, $offset, $limit);
+		return $this->searchByMimeFallback($scope, $afterMtime, $afterFileId, $limit);
 	}
 
 	/**
 	 * @return File[]
 	 */
-	private function searchPaged(Folder $scope, int $offset, int $limit): array {
+	private function searchPaged(Folder $scope, int $afterMtime, int $afterFileId, int $limit): array {
 		$mimeComparisons = [];
 		foreach (self::MIME_PREFIXES as $prefix) {
 			$mimeComparisons[] = new SearchComparison(
@@ -90,18 +96,34 @@ class MediaFinder {
 				$prefix . '/%',
 			);
 		}
+		$operator = new SearchBinaryOperator(ISearchBinaryOperator::OPERATOR_OR, $mimeComparisons);
+		if ($afterFileId > 0) {
+			$operator = new SearchBinaryOperator(ISearchBinaryOperator::OPERATOR_AND, [
+				$operator,
+				new SearchComparison(ISearchComparison::COMPARE_GREATER_THAN_EQUAL, 'mtime', $afterMtime),
+			]);
+		}
+		$order = [
+			new SearchOrder(ISearchOrder::DIRECTION_ASCENDING, 'mtime'),
+			new SearchOrder(ISearchOrder::DIRECTION_ASCENDING, 'fileid'),
+		];
 
-		$query = new SearchQuery(
-			new SearchBinaryOperator(ISearchBinaryOperator::OPERATOR_OR, $mimeComparisons),
-			$limit,
-			$offset,
-			[new SearchOrder(ISearchOrder::DIRECTION_ASCENDING, 'fileid')],
-		);
-
-		// The parameter is typed against the public ISearchQuery, which this private
-		// class implements — psalm cannot see that from the OCP stubs alone.
-		/** @psalm-suppress InvalidArgument */
-		return $this->onlyFiles($scope->search($query));
+		// Files at the cursor's own mtime that were already seen come first in this
+		// order. Usually they are a handful and the first page has plenty after them,
+		// but a bulk copy can stamp thousands of files with one mtime, so keep paging
+		// until something new turns up or the results run out. The offset here only
+		// ever counts files at that one mtime, never the library behind the cursor.
+		for ($offset = 0; ; $offset += $limit) {
+			$query = new SearchQuery($operator, $limit, $offset, $order);
+			// The parameter is typed against the public ISearchQuery, which this private
+			// class implements — psalm cannot see that from the OCP stubs alone.
+			/** @psalm-suppress InvalidArgument */
+			$page = $scope->search($query);
+			$fresh = self::after($this->onlyFiles($page), $afterMtime, $afterFileId);
+			if ($fresh !== [] || count($page) < $limit) {
+				return $fresh;
+			}
+		}
 	}
 
 	/**
@@ -109,7 +131,7 @@ class MediaFinder {
 	 *
 	 * @return File[]
 	 */
-	private function searchByMimeFallback(Folder $scope, int $offset, int $limit): array {
+	private function searchByMimeFallback(Folder $scope, int $afterMtime, int $afterFileId, int $limit): array {
 		$nodes = [];
 		foreach (self::MIME_PREFIXES as $prefix) {
 			foreach ($scope->searchByMime($prefix) as $node) {
@@ -118,11 +140,28 @@ class MediaFinder {
 		}
 
 		$files = $this->onlyFiles($nodes);
-		// Same order as the paged path, so a fallback mid-scan does not reshuffle
-		// the window and skip whatever the previous page had already passed.
-		usort($files, static fn (File $a, File $b): int => $a->getId() <=> $b->getId());
+		// Same order as the paged path, so a fallback mid-scan resumes from the same
+		// cursor without skipping anything.
+		usort($files, static fn (File $a, File $b): int => [$a->getMTime(), $a->getId()] <=> [$b->getMTime(), $b->getId()]);
 
-		return array_slice($files, $offset, $limit);
+		return array_slice(self::after($files, $afterMtime, $afterFileId), 0, $limit);
+	}
+
+	/**
+	 * The files strictly after the cursor, in the order given.
+	 *
+	 * @param File[] $files
+	 * @return File[]
+	 */
+	private static function after(array $files, int $afterMtime, int $afterFileId): array {
+		if ($afterFileId <= 0) {
+			return $files;
+		}
+		return array_values(array_filter(
+			$files,
+			static fn (File $f): bool => $f->getMTime() > $afterMtime
+				|| ($f->getMTime() === $afterMtime && $f->getId() > $afterFileId),
+		));
 	}
 
 	/**

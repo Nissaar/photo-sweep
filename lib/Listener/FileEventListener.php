@@ -19,6 +19,8 @@ use OCP\EventDispatcher\IEventListener;
 use OCP\Files\Events\Node\AbstractNodesEvent;
 use OCP\Files\Events\Node\NodeDeletedEvent;
 use OCP\Files\File;
+use OCP\Files\Folder;
+use OCP\Files\IRootFolder;
 use OCP\Files\Node;
 use Psr\Log\LoggerInterface;
 
@@ -54,6 +56,7 @@ class FileEventListener implements IEventListener {
 		private DecisionMapper $decisionMapper,
 		private ScanMapper $scanMapper,
 		private IndexService $indexService,
+		private IRootFolder $rootFolder,
 		private LoggerInterface $logger,
 	) {
 	}
@@ -78,6 +81,10 @@ class FileEventListener implements IEventListener {
 
 	private function onDeleted(Node $node): void {
 		try {
+			if ($node instanceof Folder) {
+				$this->onFolderDeleted($node);
+				return;
+			}
 			$userId = $this->userForMedia($node);
 			if ($userId === null) {
 				return;
@@ -91,6 +98,23 @@ class FileEventListener implements IEventListener {
 				'app' => 'photosweep',
 			]);
 		}
+	}
+
+	/**
+	 * A deleted folder raises one event, for itself; nothing is heard about what was
+	 * inside. Without this every photo in it would stay in the grid, offered up for
+	 * review, until the next complete pass noticed.
+	 */
+	private function onFolderDeleted(Folder $folder): void {
+		$userId = $this->ownerOf($folder);
+		if ($userId === null || $this->scanMapper->find($userId) === null) {
+			return;
+		}
+		$relativePath = $this->rootFolder->getUserFolder($userId)->getRelativePath($folder->getPath());
+		if ($relativePath === null) {
+			return;
+		}
+		$this->mediaMapper->removeUnderPath($userId, $relativePath);
 	}
 
 	/**

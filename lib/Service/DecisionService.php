@@ -16,7 +16,6 @@ use OCA\PhotoSweep\Db\Verdict;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
-use OCP\Files\Node;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -28,12 +27,18 @@ use Psr\Log\LoggerInterface;
  */
 class DecisionService {
 
+	/**
+	 * Most pending deletes the review list returns. Far past what anyone reviews in one
+	 * sitting, and applying acts only on the ids the client shows, so a longer queue
+	 * is simply worked through in more than one go.
+	 */
+	public const PENDING_LIMIT = 5000;
+
 	public function __construct(
 		private DecisionMapper $decisionMapper,
 		private MediaMapper $mediaMapper,
 		private IRootFolder $rootFolder,
 		private IndexService $indexService,
-		private ConfigService $configService,
 		private LoggerInterface $logger,
 	) {
 	}
@@ -103,9 +108,12 @@ class DecisionService {
 			try {
 				$this->record($userId, $fileId, $verdict);
 				$recorded++;
-			} catch (\Throwable $e) {
+			} catch (DoesNotExistException|\InvalidArgumentException $e) {
 				// A file that left the library between the deck loading and the
-				// phone coming back online is expected, not an error.
+				// phone coming back online is expected, not an error, and so is an
+				// entry the client mangled. Anything else — the database failing —
+				// is a real error and must not be reported back as a skipped photo,
+				// or the phone would drop a verdict it should have retried.
 				$skipped[] = $fileId;
 			}
 		}
@@ -121,7 +129,7 @@ class DecisionService {
 		// is briefly unreachable looks exactly like a file that has been removed —
 		// so checking here would sometimes throw away real work to tidy a list.
 		// Applying already copes with a file that has since vanished.
-		return $this->decisionMapper->findPending($userId, Verdict::DELETE);
+		return $this->decisionMapper->findPending($userId, Verdict::DELETE, self::PENDING_LIMIT);
 	}
 
 	/**
@@ -160,15 +168,17 @@ class DecisionService {
 			return $decisions;
 		}
 
-		// Folder mode does not delete: it moves the file here. Such a file is still
-		// present on purpose, and mistaking that for a restore would empty the whole
-		// list for everyone who uses that mode.
-		$targetPrefix = rtrim($this->configService->getTargetFolder($userId), '/') . '/';
+		// Folder mode does not delete: it moves the file into a folder. Such a file is
+		// still present on purpose, and mistaking that for a restore would empty the
+		// whole list for everyone who uses that mode. Every folder that still holds
+		// collected photos counts, not only the one set now, for rows applied before
+		// the folder each photo went to was recorded.
+		$collectionPrefixes = $this->indexService->collectionPrefixes($userId);
 
 		$kept = [];
 		$staleIds = [];
 		foreach ($decisions as $decision) {
-			if ($this->isRestored($userFolder, $decision, $targetPrefix)) {
+			if ($this->isRestored($userFolder, $decision, $collectionPrefixes)) {
 				$staleIds[] = $decision->getFileId();
 			} else {
 				$kept[] = $decision;
@@ -199,11 +209,17 @@ class DecisionService {
 	 *
 	 * A trashed file is not in the user's folder, so for trash mode any sighting
 	 * means someone put it back. Folder mode is the awkward one: the file is meant
-	 * to still exist, just somewhere else, so only a file that has left that folder
-	 * counts as restored.
+	 * to still exist, just somewhere else, so only a file that has left the folder it
+	 * was collected into counts as restored.
+	 *
+	 * That folder is the one recorded when the file was moved. Comparing against the
+	 * folder setting instead would, the moment the setting changed, call every photo
+	 * already collected "restored" and throw away its undo.
+	 *
+	 * @param string[] $collectionPrefixes for rows that predate the recorded folder
 	 */
-	private function isRestored(Folder $userFolder, Decision $decision, string $targetPrefix): bool {
-		$node = $this->findNode($userFolder, $decision->getFileId());
+	private function isRestored(Folder $userFolder, Decision $decision, array $collectionPrefixes): bool {
+		$node = $userFolder->getFirstNodeById($decision->getFileId());
 		if ($node === null) {
 			return false;
 		}
@@ -215,18 +231,15 @@ class DecisionService {
 		// Everything below errs towards keeping the row. A stale entry is a cosmetic
 		// annoyance; dropping a real one throws away the only record of what this app
 		// did to a file, and with it the undo.
-		if ($targetPrefix === '/') {
+		$folder = $decision->getAppliedFolder();
+		$prefixes = $folder !== null && $folder !== '' && $folder !== '/'
+			? [rtrim($folder, '/') . '/']
+			: $collectionPrefixes;
+		if ($prefixes === []) {
 			return false;
 		}
 
 		$relativePath = $userFolder->getRelativePath($node->getPath());
-		return $relativePath !== null && !str_starts_with($relativePath, $targetPrefix);
-	}
-
-	private function findNode(Folder $userFolder, int $fileId): ?Node {
-		if (method_exists($userFolder, 'getFirstNodeById')) {
-			return $userFolder->getFirstNodeById($fileId);
-		}
-		return $userFolder->getById($fileId)[0] ?? null;
+		return $relativePath !== null && !IndexService::isUnderAny($relativePath, $prefixes);
 	}
 }
