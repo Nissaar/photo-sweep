@@ -8,25 +8,19 @@ plugins {
 }
 
 /**
- * The version comes from the release tag, so the tag, the APK and the published
- * release can never disagree. Locally (no RELEASE_TAG) it builds as a dev version.
- */
-val appVersionName: String =
-    (System.getenv("RELEASE_TAG")?.takeIf { it.isNotBlank() } ?: "v0.1.0-dev")
-        .removePrefix("v")
-        .removePrefix("android-")
-
-/**
+ * Written out rather than derived from the release tag, so anyone building from a
+ * checkout gets the version the release did. F-Droid builds from the tag with no
+ * RELEASE_TAG in its environment, and a derived version came out as 0.1.0-dev.
+ *
+ * The release workflow checks that the tag agrees with versionName and that a
+ * changelog exists for versionCode, so the two cannot drift apart unnoticed.
+ *
  * Android decides what counts as an update purely from versionCode, and it must
- * increase every release or the new APK will not install over the old one.
+ * increase every release or the new APK will not install over the old one. The
+ * scheme is major * 10000 + minor * 100 + patch.
  */
-val appVersionCode: Int = run {
-    val parts = appVersionName.substringBefore('-').split('.')
-    val major = parts.getOrNull(0)?.toIntOrNull() ?: 0
-    val minor = parts.getOrNull(1)?.toIntOrNull() ?: 0
-    val patch = parts.getOrNull(2)?.toIntOrNull() ?: 0
-    (major * 10_000) + (minor * 100) + patch
-}
+val appVersionName = "1.0.2"
+val appVersionCode = 10002
 
 android {
     namespace = "io.github.nissaar.photosweep"
@@ -58,6 +52,13 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+    // F-Droid's scanner flags the dependency list AGP embeds in the APK, which is
+    // encrypted for Google alone, and that blob also stops a rebuilt APK from
+    // matching the published one byte for byte.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
     }
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
