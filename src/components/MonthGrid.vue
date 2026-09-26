@@ -37,35 +37,36 @@
 		</NcEmptyContent>
 
 		<ul v-else class="pc-months__grid">
-			<li v-for="month in visible" :key="month.month">
+			<li v-for="month in visible" :key="month.month" class="pc-months__cell">
 				<button class="pc-month" :class="{ 'pc-month--done': month.done }" @click="$emit('open', month.month)">
 					<span class="pc-month__name">{{ label(month.month) }}</span>
 					<span class="pc-month__count">
-						{{ month.done
-							? t('photosweep', 'All {total} reviewed', { total: month.total })
-							: t('photosweep', '{remaining} of {total} left', { remaining: month.remaining, total: month.total }) }}
+						{{ countLabel(month) }}
 					</span>
 					<span class="pc-month__bar">
 						<span class="pc-month__fill" :style="{ width: progress(month) }" />
 					</span>
-					<NcButton
-						v-if="month.reviewed > 0"
-						class="pc-month__reset"
-						variant="tertiary"
-						:aria-label="t('photosweep', 'Review this month again')"
-						@click.stop="$emit('reset', month.month)">
-						<template #icon>
-							<Restore :size="18" />
-						</template>
-					</NcButton>
 				</button>
+				<!-- A sibling of the tile, not inside it: a button within a button is
+				     invalid, and screen readers announce the pair as one control. -->
+				<NcButton
+					v-if="month.reviewed > 0"
+					class="pc-month__again"
+					variant="tertiary"
+					:title="t('photosweep', 'Review this month again')"
+					:aria-label="t('photosweep', 'Review {month} again', { month: label(month.month) })"
+					@click="$emit('reopen', month.month)">
+					<template #icon>
+						<Restore :size="18" />
+					</template>
+				</NcButton>
 			</li>
 		</ul>
 	</div>
 </template>
 
 <script>
-import { translate as t } from '@nextcloud/l10n'
+import { translatePlural as n, translate as t } from '@nextcloud/l10n'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcCheckboxRadioSwitch from '@nextcloud/vue/components/NcCheckboxRadioSwitch'
 import NcEmptyContent from '@nextcloud/vue/components/NcEmptyContent'
@@ -95,7 +96,10 @@ export default {
 		},
 	},
 
-	emits: ['open', 'reset'],
+	// `reopen` shows the month with the photos already judged, so going over it
+	// again never costs a verdict. Clearing them is a separate, confirmed step
+	// inside the month itself.
+	emits: ['open', 'reopen'],
 
 	data() {
 		return {
@@ -130,9 +134,9 @@ export default {
 					? t('photosweep', 'Reading your library…')
 					: t('photosweep', 'No photos indexed yet')
 			}
-			return t('photosweep', '{left} photos still to go through, across {months} months', {
-				left: this.summary.photosLeft,
-				months: this.summary.monthsToReview,
+			return t('photosweep', '{photos} still to go through, across {months}', {
+				photos: n('photosweep', '%n photo', '%n photos', this.summary.photosLeft),
+				months: n('photosweep', '%n month', '%n months', this.summary.monthsToReview),
 			})
 		},
 
@@ -160,6 +164,15 @@ export default {
 	methods: {
 		t,
 		label: monthLabel,
+
+		countLabel(month) {
+			if (month.done) {
+				return n('photosweep', 'All %n reviewed', 'All %n reviewed', month.total)
+			}
+			return n('photosweep', '{remaining} of %n left', '{remaining} of %n left', month.total, {
+				remaining: month.remaining,
+			})
+		},
 
 		progress(month) {
 			if (!month.total) {
@@ -201,8 +214,11 @@ export default {
 	margin: 0;
 }
 
-.pc-month {
+.pc-months__cell {
 	position: relative;
+}
+
+.pc-month {
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
@@ -248,7 +264,7 @@ export default {
 	background-color: var(--color-primary-element);
 }
 
-.pc-month__reset {
+.pc-month__again {
 	position: absolute;
 	top: 6px;
 	inset-inline-end: 6px;

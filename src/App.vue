@@ -51,6 +51,7 @@
 				<IndexStatus
 					:scan="scan"
 					:summary="summary"
+					:scanning="scanning"
 					@scan="runScan"
 					@rebuild="rebuild" />
 			</template>
@@ -65,21 +66,24 @@
 				v-else-if="view === 'months'"
 				:months="months"
 				:summary="summary"
-				:scanning="scan.running"
+				:scanning="scanning"
 				@open="openMonth"
-				@reset="resetMonth" />
+				@reopen="reopenMonth" />
 
 			<SwipeDeck
 				v-else-if="view === 'swipe'"
-				:key="openedMonth"
+				:key="`${openedMonth}:${showJudged}`"
 				:month="openedMonth"
+				:showJudged="showJudged"
+				:timeZone="config.timezone"
 				@back="backToMonths"
-				@changed="refreshSummary" />
+				@changed="scheduleSummaryRefresh" />
 
 			<ReviewList
 				v-else-if="view === 'review'"
 				:trashAvailable="trashAvailable"
 				:mode="config.mode"
+				:timeZone="config.timezone"
 				@changed="refreshAll" />
 
 			<SettingsPanel
@@ -111,6 +115,19 @@ import ReviewList from './components/ReviewList.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import SwipeDeck from './components/SwipeDeck.vue'
 import api from './api.js'
+
+/** How long the counters wait for a run of swipes to settle before refreshing. */
+const SUMMARY_DEBOUNCE = 500
+
+/** Backoff while another scan (usually cron) holds the index: first and longest wait. */
+const BUSY_WAIT_FIRST = 2000
+const BUSY_WAIT_MAX = 30000
+
+/**
+ * @param {number} ms how long
+ * @return {Promise<void>}
+ */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const EMPTY_SUMMARY = {
 	indexed: 0,
@@ -145,6 +162,8 @@ export default {
 		return {
 			view: 'months',
 			openedMonth: null,
+			/** Whether the opened month includes the photos already judged. */
+			showJudged: false,
 			loading: true,
 			months: [],
 			summary: { ...EMPTY_SUMMARY },
@@ -161,6 +180,31 @@ export default {
 			trashAvailable: loadState('photosweep', 'trashAvailable', true),
 			autoScanning: false,
 		}
+	},
+
+	computed: {
+		/**
+		 * Whether a scan is under way.
+		 *
+		 * Mostly the app's own loop: the server sets and clears `scan.running` inside
+		 * a single request, so the answers to this page's own scans always say false.
+		 * The flag is only ever seen true while some other process — cron, occ,
+		 * another tab — is scanning.
+		 */
+		scanning() {
+			return this.autoScanning || Boolean(this.scan.running)
+		},
+	},
+
+	created() {
+		// Not reactive: bookkeeping for requests, nothing on screen reads them.
+		this.summaryTimer = null
+		this.summaryRequest = 0
+		this.saveRequest = 0
+	},
+
+	beforeUnmount() {
+		clearTimeout(this.summaryTimer)
 	},
 
 	async mounted() {
@@ -184,6 +228,22 @@ export default {
 
 		openMonth(month) {
 			this.openedMonth = month
+			this.showJudged = false
+			this.view = 'swipe'
+		},
+
+		/**
+		 * Opens a month with every photo in it, including the ones already judged.
+		 *
+		 * This used to clear the month's verdicts first, pending deletes and all, on a
+		 * single click. Going over a month again should never cost anything; clearing
+		 * is still there inside the month, behind a confirmation.
+		 *
+		 * @param {string} month e.g. "2024-07"
+		 */
+		reopenMonth(month) {
+			this.openedMonth = month
+			this.showJudged = true
 			this.view = 'swipe'
 		},
 
@@ -193,6 +253,10 @@ export default {
 		},
 
 		async refreshAll() {
+			// Anything a debounced refresh would bring is about to arrive anyway, and
+			// its older answer must not land on top of this one.
+			clearTimeout(this.summaryTimer)
+			this.summaryRequest++
 			try {
 				const [status, timeline] = await Promise.all([api.status(), api.months()])
 				this.scan = status.scan
@@ -205,9 +269,26 @@ export default {
 			}
 		},
 
+		/**
+		 * Refreshes the counters once a run of swipes has paused.
+		 *
+		 * Every verdict reports a change, and refreshing on each one sent a request
+		 * per photo whose answers could arrive out of order and make the counters
+		 * run backwards.
+		 */
+		scheduleSummaryRefresh() {
+			clearTimeout(this.summaryTimer)
+			this.summaryTimer = setTimeout(() => this.refreshSummary(), SUMMARY_DEBOUNCE)
+		},
+
 		async refreshSummary() {
+			const request = ++this.summaryRequest
 			try {
 				const timeline = await api.months()
+				// A newer refresh has been sent since; its answer is the one to keep.
+				if (request !== this.summaryRequest) {
+					return
+				}
 				this.summary = timeline.summary
 				this.months = timeline.months
 			} catch {
@@ -228,20 +309,47 @@ export default {
 				return
 			}
 			this.autoScanning = true
+			// Kept until a request has actually run. While another scan holds the
+			// index the server answers without doing anything, and a rebuild asked
+			// for then must not quietly turn into an ordinary refresh.
+			let fullPending = full
+			let wait = 0
 			try {
 				let guard = 0
 				do {
-					const result = await api.scan(full && guard === 0)
+					const result = await api.scan(fullPending)
 					this.scan = result.scan
 					this.summary = result.summary
-					this.months = (await api.months()).months
 
 					if (this.scan.error) {
-						showError(this.scan.error)
+						// The server's text is an exception message and belongs in its
+						// log, which is where it already is.
+						showError(t('photosweep', 'The scan stopped because of an error'))
 						break
+					}
+
+					if (this.scan.running) {
+						// Someone else is scanning — cron, most likely. Asking again at
+						// once only runs into the rate limit, so wait, a little longer
+						// each time, and pick up when it is done.
+						wait = Math.min(wait ? wait * 2 : BUSY_WAIT_FIRST, BUSY_WAIT_MAX)
+						await sleep(wait)
+					} else {
+						fullPending = false
+						wait = 0
+						// Only when new months have turned up. The grid gets its full
+						// numbers once the scan is over, and until then a months request
+						// per chunk would double the load of a scan for little to see.
+						if (result.summary.months !== this.months.length) {
+							this.months = (await api.months()).months
+						}
 					}
 					guard++
 				} while (!this.scan.complete && guard < 500)
+
+				const timeline = await api.months()
+				this.summary = timeline.summary
+				this.months = timeline.months
 			} catch {
 				showError(t('photosweep', 'The scan could not finish'))
 			} finally {
@@ -253,18 +361,15 @@ export default {
 			await this.runScan(true)
 		},
 
-		async resetMonth(month) {
-			try {
-				await api.resetMonth(month)
-				await this.refreshAll()
-			} catch {
-				showError(t('photosweep', 'Could not reopen that month'))
-			}
-		},
-
 		async saveConfig(patch) {
+			// Saves can overlap, and each answer is the whole config as it stood at the
+			// time. Only the newest request's answer is current.
+			const request = ++this.saveRequest
 			try {
-				this.config = await api.saveConfig(patch)
+				const config = await api.saveConfig(patch)
+				if (request === this.saveRequest) {
+					this.config = config
+				}
 			} catch (error) {
 				// The server rejects a few settings by hand — an empty target folder,
 				// for one — and its reason is more use than a generic failure.
