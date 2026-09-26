@@ -41,7 +41,9 @@
 				:modelValue="local.targetFolder"
 				:label="t('photosweep', 'Collection folder')"
 				:helperText="t('photosweep', 'Created if it does not exist. It is left out of the index, so collected photos will not come back around for review.')"
-				@update:modelValue="set('targetFolder', $event)" />
+				@update:modelValue="set('targetFolder', $event)"
+				@blur="flush('targetFolder')"
+				@keydown.enter="flush('targetFolder')" />
 		</section>
 
 		<section class="pc-settings__section">
@@ -51,7 +53,9 @@
 				:modelValue="local.sourceFolder"
 				:label="t('photosweep', 'Folder to go through')"
 				:helperText="t('photosweep', 'Use / for everything, or narrow it to something like /Photos. Changing this needs a rebuild to take effect.')"
-				@update:modelValue="set('sourceFolder', $event)" />
+				@update:modelValue="set('sourceFolder', $event)"
+				@blur="flush('sourceFolder')"
+				@keydown.enter="flush('sourceFolder')" />
 
 			<NcCheckboxRadioSwitch
 				:modelValue="local.skipDecided"
@@ -121,10 +125,9 @@ export default {
 	},
 
 	created() {
-		// Per setting, so a change to one never cancels the pending save of another.
-		// Not reactive: nothing on screen depends on them.
+		// Per setting, so saving one never drops another's unsaved edit. Not
+		// reactive: nothing on screen depends on it.
 		this.unsaved = {}
-		this.timers = {}
 	},
 
 	beforeUnmount() {
@@ -136,11 +139,12 @@ export default {
 		t,
 
 		/**
-		 * Applies a change locally at once and saves it shortly after.
+		 * Applies a change locally at once. Switches save straight away; the folder
+		 * fields save when they lose focus or on Enter.
 		 *
-		 * The delay is there for the text fields: saving on every keystroke would
-		 * write a dozen half-typed folder paths, and one of them would be the one that
-		 * gets created.
+		 * Saving while typing would write half-typed folder paths, one of which would
+		 * be the one that gets created, and the server refuses in-between values such
+		 * as "/" for the collection folder, so each pause would flash an error.
 		 *
 		 * @param {string} key the setting
 		 * @param {string|boolean} value its new value
@@ -148,9 +152,9 @@ export default {
 		set(key, value) {
 			this.local = { ...this.local, [key]: value }
 			this.unsaved[key] = value
-			clearTimeout(this.timers[key])
-			const delay = typeof value === 'string' ? 700 : 0
-			this.timers[key] = setTimeout(() => this.flush(key), delay)
+			if (typeof value !== 'string') {
+				this.flush(key)
+			}
 		},
 
 		/**
@@ -162,8 +166,6 @@ export default {
 			const keys = only === null ? Object.keys(this.unsaved) : [only]
 			const patch = {}
 			for (const key of keys) {
-				clearTimeout(this.timers[key])
-				delete this.timers[key]
 				if (key in this.unsaved) {
 					patch[key] = this.unsaved[key]
 					delete this.unsaved[key]
