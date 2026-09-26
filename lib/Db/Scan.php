@@ -18,6 +18,10 @@ use OCP\AppFramework\Db\Entity;
  * @method void setUserId(string $userId)
  * @method int getCursorOffset()
  * @method void setCursorOffset(int $cursorOffset)
+ * @method int getCursorMtime()
+ * @method void setCursorMtime(int $cursorMtime)
+ * @method int getCursorFileId()
+ * @method void setCursorFileId(int $cursorFileId)
  * @method bool getComplete()
  * @method void setComplete(bool $complete)
  * @method bool getRunning()
@@ -43,7 +47,14 @@ class Scan extends Entity implements \JsonSerializable {
 	 * Starting from null means no real value can ever collide with the default.
 	 */
 	protected $userId = null;
+	/**
+	 * No longer read. The scan pages by {@see $cursorMtime} and {@see $cursorFileId}
+	 * now; the column stays because dropping it buys nothing and every row still has
+	 * it, and Entity refuses to hydrate a column it has no property for.
+	 */
 	protected $cursorOffset = null;
+	protected $cursorMtime = null;
+	protected $cursorFileId = null;
 	protected $complete = null;
 	protected $running = null;
 	protected $found = null;
@@ -53,6 +64,8 @@ class Scan extends Entity implements \JsonSerializable {
 
 	public function __construct() {
 		$this->addType('cursorOffset', 'integer');
+		$this->addType('cursorMtime', 'integer');
+		$this->addType('cursorFileId', 'integer');
 		$this->addType('complete', 'boolean');
 		$this->addType('running', 'boolean');
 		$this->addType('found', 'integer');
