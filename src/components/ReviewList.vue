@@ -16,6 +16,20 @@
 			<NcLoadingIcon :size="44" />
 		</div>
 
+		<NcEmptyContent
+			v-else-if="loadFailed"
+			:name="t('photosweep', 'Could not load your list')"
+			:description="t('photosweep', 'Nothing has been changed. Check your connection and try again.')">
+			<template #icon>
+				<AlertCircle />
+			</template>
+			<template #action>
+				<NcButton @click="load">
+					{{ t('photosweep', 'Try again') }}
+				</NcButton>
+			</template>
+		</NcEmptyContent>
+
 		<template v-else>
 			<NcNoteCard v-if="mode === 'trash' && !trashAvailable" type="warning">
 				{{ t('photosweep', 'The trash app is disabled on this server, so deleting is permanent and cannot be undone. Switch to collecting files in a folder in Settings if you would rather check them first.') }}
@@ -38,7 +52,7 @@
 
 			<template v-else>
 				<div class="pc-review__actions">
-					<NcButton variant="primary" :disabled="applying" @click="confirmApply">
+					<NcButton variant="primary" :disabled="applying || busy.size > 0" @click="confirmApply">
 						<template #icon>
 							<NcLoadingIcon v-if="applying" :size="20" />
 							<Delete v-else :size="20" />
@@ -57,7 +71,9 @@
 						<NcButton
 							class="pc-tile__pull"
 							variant="tertiary"
-							:aria-label="t('photosweep', 'Keep this one after all')"
+							:title="t('photosweep', 'Keep this one after all')"
+							:aria-label="keepLabel(item)"
+							:disabled="applying || busy.has(item.fileId)"
 							@click="pullOut(item)">
 							<template #icon>
 								<Close :size="18" />
@@ -77,11 +93,13 @@
 					<li v-for="item in applied" :key="item.fileId" class="pc-tile pc-tile--done">
 						<img :src="preview(item.fileId, 300)" :alt="item.name" loading="lazy">
 						<span class="pc-tile__name" :title="item.originPath">{{ item.name }}</span>
-						<span class="pc-tile__when">{{ date(item.appliedAt) }}</span>
+						<span class="pc-tile__when">{{ date(item.appliedAt, timeZone) }}</span>
 						<NcButton
 							class="pc-tile__pull"
 							variant="tertiary"
-							:aria-label="t('photosweep', 'Restore')"
+							:title="t('photosweep', 'Restore')"
+							:aria-label="restoreLabel(item)"
+							:disabled="applying || busy.has(item.fileId)"
 							@click="restore(item)">
 							<template #icon>
 								<Restore :size="18" />
@@ -102,9 +120,7 @@
 					{{ t('photosweep', 'Cancel') }}
 				</NcButton>
 				<NcButton variant="error" @click="apply">
-					{{ mode === 'trash'
-						? t('photosweep', 'Move to trash')
-						: t('photosweep', 'Move to folder') }}
+					{{ confirmLabel }}
 				</NcButton>
 			</template>
 		</NcDialog>
@@ -119,17 +135,25 @@ import NcDialog from '@nextcloud/vue/components/NcDialog'
 import NcEmptyContent from '@nextcloud/vue/components/NcEmptyContent'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcNoteCard from '@nextcloud/vue/components/NcNoteCard'
+import AlertCircle from 'vue-material-design-icons/AlertCircle.vue'
 import Close from 'vue-material-design-icons/Close.vue'
 import Delete from 'vue-material-design-icons/Delete.vue'
 import DeleteClock from 'vue-material-design-icons/DeleteClock.vue'
 import Restore from 'vue-material-design-icons/Restore.vue'
-import api, { previewUrl } from '../api.js'
+import api, { errorCode, previewUrl } from '../api.js'
 import { dateLabel, sizeLabel } from '../format.js'
+
+/**
+ * For translations with a file name in them. Vue escapes the result when it renders
+ * it, so escaping here as well would show a name like "Tom & Jerry.jpg" as "&amp;".
+ */
+const PLAIN = { escape: false, sanitize: false }
 
 export default {
 	name: 'ReviewList',
 
 	components: {
+		AlertCircle,
 		Close,
 		Delete,
 		DeleteClock,
@@ -152,6 +176,11 @@ export default {
 			type: Boolean,
 			default: false,
 		},
+
+		timeZone: {
+			type: String,
+			default: null,
+		},
 	},
 
 	emits: ['changed'],
@@ -161,8 +190,11 @@ export default {
 			pending: [],
 			applied: [],
 			loading: true,
+			loadFailed: false,
 			applying: false,
 			confirming: false,
+			/** File ids with a take-out or restore request still out. */
+			busy: new Set(),
 		}
 	},
 
@@ -172,13 +204,27 @@ export default {
 			return bytes ? sizeLabel(bytes) : ''
 		},
 
+		/** Trash mode with the trash app off: the one case where nothing can be undone. */
+		permanent() {
+			return this.mode === 'trash' && this.trashAvailable === false
+		},
+
 		confirmMessage() {
 			if (this.mode === 'trash') {
-				return this.trashAvailable
-					? t('photosweep', 'They go to your Nextcloud trash and can be restored from here until your server clears them.')
-					: t('photosweep', 'The trash is disabled on this server, so this cannot be undone.')
+				return this.permanent
+					? t('photosweep', 'The trash is disabled on this server, so this cannot be undone.')
+					: t('photosweep', 'They go to your Nextcloud trash and can be restored from here until your server clears them.')
 			}
 			return t('photosweep', 'They are moved into your collection folder. Nothing is deleted.')
+		},
+
+		confirmLabel() {
+			if (this.mode !== 'trash') {
+				return t('photosweep', 'Move to folder')
+			}
+			return this.permanent
+				? t('photosweep', 'Delete permanently')
+				: t('photosweep', 'Move to trash')
 		},
 	},
 
@@ -192,14 +238,36 @@ export default {
 		preview: previewUrl,
 		date: dateLabel,
 
+		/**
+		 * Names the photo, so a screen reader does not hear the same label on every tile.
+		 *
+		 * @param {object} item a decision from the list
+		 * @return {string}
+		 */
+		keepLabel(item) {
+			return t('photosweep', 'Keep {name} after all', { name: item.name }, undefined, PLAIN)
+		},
+
+		/**
+		 * @param {object} item a decision from the list
+		 * @return {string}
+		 */
+		restoreLabel(item) {
+			return t('photosweep', 'Restore {name}', { name: item.name }, undefined, PLAIN)
+		},
+
 		async load() {
 			this.loading = true
 			try {
 				const [pending, applied] = await Promise.all([api.pending(), api.applied()])
 				this.pending = pending.decisions
 				this.applied = applied.decisions
+				this.loadFailed = false
 			} catch {
-				showError(t('photosweep', 'Could not load your list'))
+				// Its own state rather than a toast over an empty list: an empty list
+				// says "nothing marked", which this screen must not claim when it
+				// simply could not ask.
+				this.loadFailed = true
 			} finally {
 				this.loading = false
 			}
@@ -209,53 +277,112 @@ export default {
 			this.confirming = true
 		},
 
-		async pullOut(item) {
-			try {
-				await api.undo(item.fileId)
-				this.pending = this.pending.filter((d) => d.fileId !== item.fileId)
-				this.$emit('changed')
-			} catch {
-				showError(t('photosweep', 'Could not take that one out of the list'))
+		/**
+		 * Runs one request for a file, refusing a second while the first is still out.
+		 *
+		 * A repeated click would reach the server after the first had already worked,
+		 * and report a failure for something that succeeded.
+		 *
+		 * @param {number} fileId the file
+		 * @param {() => Promise<void>} task the request
+		 */
+		async whileBusy(fileId, task) {
+			if (this.busy.has(fileId)) {
+				return
 			}
+			this.busy.add(fileId)
+			try {
+				await task()
+			} finally {
+				this.busy.delete(fileId)
+			}
+		},
+
+		async pullOut(item) {
+			await this.whileBusy(item.fileId, async () => {
+				try {
+					await api.undo(item.fileId)
+					this.pending = this.pending.filter((d) => d.fileId !== item.fileId)
+					this.$emit('changed')
+				} catch {
+					showError(t('photosweep', 'Could not take that one out of the list'))
+				}
+			})
 		},
 
 		async apply() {
 			this.confirming = false
 			this.applying = true
+			// Exactly what is on screen. Anything marked on another device since this
+			// list loaded stays pending until it has been looked at here.
+			const fileIds = this.pending.map((item) => item.fileId)
 			try {
-				const result = await api.apply()
+				// `permanent` is only ever true once the dialog has said, in so many
+				// words, that this cannot be undone. The server refuses a permanent
+				// delete without it.
+				const result = await api.apply(fileIds, this.permanent)
 				if (result.error) {
-					showError(result.error)
+					// The server's own text can carry a path or an exception message,
+					// neither of which belongs in a toast.
+					showError(result.mode === 'folder'
+						? t('photosweep', 'Nothing was moved — the collection folder could not be created')
+						: t('photosweep', 'Nothing was changed'))
 				} else if (result.failed > 0) {
-					showError(t('photosweep', '{done} done, {failed} could not be changed', {
+					showError(n('photosweep', '{done} done, %n could not be changed', '{done} done, %n could not be changed', result.failed, {
 						done: result.succeeded,
-						failed: result.failed,
 					}))
 				} else {
 					showSuccess(n('photosweep', '%n photo dealt with', '%n photos dealt with', result.succeeded))
 				}
 				await this.load()
 				this.$emit('changed')
-			} catch {
-				showError(t('photosweep', 'Nothing was changed — the request failed'))
+			} catch (error) {
+				await this.applyRefused(error)
 			} finally {
 				this.applying = false
 			}
 		},
 
-		async restore(item) {
-			try {
-				const result = await api.restore([item.fileId])
-				if (result.restored) {
-					showSuccess(t('photosweep', 'Brought back'))
-				} else {
-					showError(result.failures[0]?.reason ?? t('photosweep', 'Could not bring that back'))
-				}
-				await this.load()
-				this.$emit('changed')
-			} catch {
-				showError(t('photosweep', 'Could not bring that back'))
+		/**
+		 * Explains an apply the server turned down. Nothing on disk changed in any case.
+		 *
+		 * @param {Error} error what the request threw
+		 */
+		async applyRefused(error) {
+			switch (errorCode(error)) {
+				case 'trash_unavailable':
+					// The trash was switched off after this page loaded, so the dialog
+					// promised something reversible. Refreshing brings up the warning,
+					// and the next confirmation is an informed one.
+					showError(t('photosweep', 'Nothing was changed. The trash has just been turned off on this server, so these files would be deleted permanently. Read the warning and confirm again if you still want to.'))
+					this.$emit('changed')
+					break
+				case 'apply_running':
+					showError(t('photosweep', 'Nothing was changed — another deletion is still running. The list has been reloaded.'))
+					await this.load()
+					this.$emit('changed')
+					break
+				default:
+					showError(t('photosweep', 'Nothing was changed — the request failed'))
 			}
+		},
+
+		async restore(item) {
+			await this.whileBusy(item.fileId, async () => {
+				try {
+					const result = await api.restore([item.fileId])
+					if (result.restored) {
+						showSuccess(t('photosweep', 'Brought back'))
+					} else {
+						// The server words these reasons for people, in their language.
+						showError(result.failures[0]?.reason ?? t('photosweep', 'Could not bring that back'))
+					}
+					await this.load()
+					this.$emit('changed')
+				} catch {
+					showError(t('photosweep', 'Could not bring that back'))
+				}
+			})
 		},
 	},
 }
