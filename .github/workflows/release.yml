@@ -4,6 +4,13 @@
 # Publishes the Nextcloud app: builds the frontend, assembles the package, signs its
 # contents with the app certificate, tars it, attaches it to the GitHub release and
 # registers the release with the Nextcloud app store.
+#
+# Split in two on purpose. The build job runs npm and composer, which means it runs
+# install scripts from hundreds of packages nobody here has read, so it gets no
+# secrets and a read-only token. The publish job gets the signing key and the store
+# token, and runs nothing but this repository's own Makefile, openssl, a pinned
+# Nextcloud image and the release action. A compromised dependency can break the
+# build; it cannot read the key, which cannot be replaced once it leaks.
 
 name: Release
 
@@ -17,99 +24,136 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
-    name: Build, sign and publish the app
+  build:
+    name: Build the package
     runs-on: ubuntu-latest
 
-    # Hoisted to job level on purpose: the `secrets` context is not available in a
-    # step-level `if`, but `env` is. This is what makes optional signing work.
-    env:
-      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
-      APP_STORE_TOKEN: ${{ secrets.APP_STORE_TOKEN }}
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      number: ${{ steps.version.outputs.number }}
 
     steps:
+      # The tag reaches the shell through env rather than being pasted into the
+      # script, and has to look like a release before anything else uses it.
       - name: Resolve version
         id: version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::'$TAG' is not a release tag of the form v1.2.3"
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "number=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       # On workflow_dispatch github.ref_name is the branch, so check out the tag
       # explicitly rather than whatever main happens to be.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ steps.version.outputs.tag }}
+          persist-credentials: false
 
       # A tag that disagrees with info.xml ships a mislabelled release, and the app
       # store records whatever the XML says. Fail here instead.
       - name: Check the tag matches info.xml
+        env:
+          NUMBER: ${{ steps.version.outputs.number }}
         run: |
           set -euo pipefail
           DECLARED=$(sed -ne 's|^[[:space:]]*<version>\(.*\)</version>|\1|p' appinfo/info.xml)
-          if [ "${{ steps.version.outputs.number }}" != "$DECLARED" ]; then
-            echo "::error::Tag ${{ steps.version.outputs.number }} does not match <version>$DECLARED</version> in appinfo/info.xml"
+          if [ "$NUMBER" != "$DECLARED" ]; then
+            echo "::error::Tag $NUMBER does not match <version>$DECLARED</version> in appinfo/info.xml"
             exit 1
           fi
           echo "Version $DECLARED matches the tag."
 
-      - name: Validate info.xml against the store schema
-        run: |
-          set -euo pipefail
-          # xmllint is no longer on the runner image, and without this the release
-          # fails here with a bare 127 after the tag has already been pushed.
-          sudo apt-get update && sudo apt-get install -y libxml2-utils
-          curl -sSfL https://apps.nextcloud.com/schema/apps/info.xsd -o /tmp/info.xsd
-          xmllint --noout --schema /tmp/info.xsd appinfo/info.xml
-
-      - name: Set up PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.3'
-          coverage: none
-          tools: composer:v2
-
+      # Tests, lint and the info.xml schema check are not repeated here: the ci job
+      # below runs the whole of CI against this tag, and publish waits for it.
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
 
-      # A release that fails its own tests should never reach the store.
-      - name: Test
-        run: |
-          composer install --prefer-dist --no-progress
-          composer run cs:check
-          composer run psalm
-          composer run test:unit
-
       - name: Build the frontend
         run: |
           npm ci
-          npm run lint
           npm run build
           test -s js/photosweep-main.js
 
       - name: Assemble the package
         run: make package
 
+      - name: Hand the package to the publish job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: package
+          path: build/photosweep/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Every CI job, the acceptance runs against real Nextcloud 31 and 34 included. A tag
+  # on a commit that fails them is not signed or published.
+  ci:
+    name: CI
+    needs: build
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.build.outputs.tag }}
+
+  publish:
+    name: Sign and publish the app
+    needs: [build, ci]
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      # Only for the Makefile. Nothing from npm or composer is installed or run in
+      # this job, which is the reason it can hold the key.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.build.outputs.tag }}
+          persist-credentials: false
+
+      - name: Fetch the package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: package
+          path: build/photosweep
+
       # Signing is optional so the workflow still works in a fork with no secrets:
       # without a certificate it publishes an unsigned tarball and labels it as such.
       # The app store will refuse an unsigned one, which is the point.
-      - name: Write the signing material
-        id: signing
-        if: env.APP_PRIVATE_KEY != ''
+      #
+      # The `secrets` context cannot be used in a step-level `if`, so this step looks
+      # at them once and later steps decide on its outputs. That keeps every secret
+      # confined to the steps that actually use it.
+      - name: See which secrets are present
+        id: secrets
         env:
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+          APP_STORE_TOKEN: ${{ secrets.APP_STORE_TOKEN }}
+        run: |
+          echo "signing=$([ -n "$APP_PRIVATE_KEY" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "store=$([ -n "$APP_STORE_TOKEN" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Write the signing material
+        if: steps.secrets.outputs.signing == 'true'
+        env:
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
           APP_CERTIFICATE: ${{ secrets.APP_CERTIFICATE }}
         run: |
+          set -euo pipefail
           mkdir -p "$RUNNER_TEMP/certs"
-          printf '%s' "$APP_PRIVATE_KEY" > "$RUNNER_TEMP/certs/photosweep.key"
+          ( umask 077; printf '%s' "$APP_PRIVATE_KEY" > "$RUNNER_TEMP/certs/photosweep.key" )
           printf '%s' "$APP_CERTIFICATE" > "$RUNNER_TEMP/certs/photosweep.crt"
-          chmod 600 "$RUNNER_TEMP/certs/photosweep.key"
-          echo "present=true" >> "$GITHUB_OUTPUT"
 
       # `integrity:sign-app` writes appinfo/signature.json, which is what a server
       # checks. It needs an `occ`, so it runs inside the official image.
@@ -119,15 +163,19 @@ jobs:
       # overriding the entrypoint, which is the whole point here, means that copy
       # never happens and /var/www/html is empty. Signing needs no installed
       # instance: SignApp is registered before occ checks for one.
+      #
+      # The image is pinned by digest because it is handed the private key. This is
+      # Nextcloud 34.0.4, what `stable` pointed to on 2026-09-26. Dependabot does not
+      # update digests in workflow files, so move it by hand now and then.
       - name: Sign the package contents
-        if: steps.signing.outputs.present == 'true'
+        if: steps.secrets.outputs.signing == 'true'
         run: |
           set -euo pipefail
           docker run --rm \
             -v "$PWD/build:/build" \
             -v "$RUNNER_TEMP/certs:/certs:ro" \
             --entrypoint php \
-            nextcloud:stable \
+            nextcloud:34-apache@sha256:3bc2f3e2bceb2ba2537ddb0915a9a033e4e9c0a5bdbec08c3f92657468d18f0c \
             /usr/src/nextcloud/occ integrity:sign-app \
               --privateKey=/certs/photosweep.key \
               --certificate=/certs/photosweep.crt \
@@ -136,32 +184,34 @@ jobs:
           echo "Signed $(python3 -c "import json;print(len(json.load(open('build/photosweep/appinfo/signature.json'))['hashes']))") files."
 
       - name: Warn that the build is unsigned
-        if: steps.signing.outputs.present != 'true'
+        if: steps.secrets.outputs.signing != 'true'
         run: echo "::warning::No APP_PRIVATE_KEY secret — publishing an unsigned tarball. The Nextcloud app store will refuse it."
 
       - name: Make the tarball
         run: make tarball
 
       - name: Checksums
-        run: |
-          cd build/artifacts
-          sha256sum photosweep-*.tar.gz | tee -a SHA256SUMS.txt
+        working-directory: build/artifacts
+        run: sha256sum photosweep-*.tar.gz | tee -a SHA256SUMS.txt
 
       # The store verifies this against the registered certificate before it will
       # accept the download URL.
       - name: Sign the tarball for the store API
-        if: steps.signing.outputs.present == 'true'
+        if: steps.secrets.outputs.signing == 'true'
+        env:
+          NUMBER: ${{ needs.build.outputs.number }}
         run: |
           set -euo pipefail
           openssl dgst -sha512 -sign "$RUNNER_TEMP/certs/photosweep.key" \
-            build/artifacts/photosweep-${{ steps.version.outputs.number }}.tar.gz \
+            "build/artifacts/photosweep-${NUMBER}.tar.gz" \
             | openssl base64 -A > "$RUNNER_TEMP/signature.txt"
+          rm -rf "$RUNNER_TEMP/certs"
 
       - name: Publish release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           # Required for workflow_dispatch, where the run is not tag-triggered.
-          tag_name: ${{ steps.version.outputs.tag }}
+          tag_name: ${{ needs.build.outputs.tag }}
           files: |
             build/artifacts/photosweep-*.tar.gz
             build/artifacts/SHA256SUMS.txt
@@ -195,23 +245,29 @@ jobs:
             Requires Nextcloud 31–34 and PHP 8.1+.
 
       # The store pulls the tarball from the release it was just attached to, so this
-      # has to come last.
+      # has to come last. --fail-with-body rather than -f: when the store refuses a
+      # release, the reason is in the response body, and -f throws that away.
       - name: Register the release with the app store
-        if: steps.signing.outputs.present == 'true' && env.APP_STORE_TOKEN != ''
+        if: steps.secrets.outputs.signing == 'true' && steps.secrets.outputs.store == 'true'
+        env:
+          APP_STORE_TOKEN: ${{ secrets.APP_STORE_TOKEN }}
+          TAG: ${{ needs.build.outputs.tag }}
+          NUMBER: ${{ needs.build.outputs.number }}
         run: |
           set -euo pipefail
-          TARBALL="photosweep-${{ steps.version.outputs.number }}.tar.gz"
-          DOWNLOAD="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ steps.version.outputs.tag }}/${TARBALL}"
+          TARBALL="photosweep-${NUMBER}.tar.gz"
+          DOWNLOAD="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${TARBALL}"
 
-          curl -sSf -X POST https://apps.nextcloud.com/api/v1/apps/releases \
+          curl -sS --fail-with-body -X POST https://apps.nextcloud.com/api/v1/apps/releases \
             -H "Authorization: Token ${APP_STORE_TOKEN}" \
             -H 'Content-Type: application/json' \
             -d "$(jq -n \
                   --arg download "$DOWNLOAD" \
                   --arg signature "$(cat "$RUNNER_TEMP/signature.txt")" \
                   '{download: $download, signature: $signature, nightly: false}')"
+          echo
           echo "Published $DOWNLOAD to the app store."
 
       - name: Say what was skipped
-        if: steps.signing.outputs.present != 'true' || env.APP_STORE_TOKEN == ''
+        if: steps.secrets.outputs.signing != 'true' || steps.secrets.outputs.store != 'true'
         run: echo "::notice::Not published to the app store — see docs/PUBLISHING.md for the certificate and token setup."

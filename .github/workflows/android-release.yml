@@ -3,6 +3,11 @@
 #
 # Publishes the Android client. Tagged separately from the server app — the two are
 # versioned independently, because a server release rarely needs a new APK.
+#
+# Split in two for the same reason as the server release: the build job runs Gradle
+# and every plugin and dependency it downloads, so it gets no secrets and a read-only
+# token. The publish job gets the keystore and runs only apksigner and the release
+# action, on an APK it did not build.
 
 name: Android release
 
@@ -16,62 +21,95 @@ on:
         required: true
 
 permissions:
-  contents: write
-
-defaults:
-  run:
-    working-directory: android
+  contents: read
 
 jobs:
-  release:
-    name: Build and publish APK
+  build:
+    name: Build the APK
     runs-on: ubuntu-latest
 
-    # Hoisted to job level on purpose: the `secrets` context is not available in a
-    # step-level `if`, but `env` is. This is what makes optional signing work.
-    env:
-      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+    defaults:
+      run:
+        working-directory: android
+
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      number: ${{ steps.version.outputs.number }}
 
     steps:
+      # The tag reaches the shell through env rather than being pasted into the
+      # script, and has to look like a release before anything else uses it. A loose
+      # match is how android-v1.0.3a would once have become versionCode 10000.
       - name: Resolve version
         id: version
         working-directory: .
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^android-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::'$TAG' is not a release tag of the form android-v1.2.3"
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "number=${TAG#android-v}" >> "$GITHUB_OUTPUT"
 
       # On workflow_dispatch github.ref_name is the branch, so check out the tag
       # explicitly rather than whatever main happens to be.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ steps.version.outputs.tag }}
+          persist-credentials: false
+
+      # The version is written as literals in build.gradle.kts, so that F-Droid,
+      # which builds from the tag with nothing of GitHub's environment, gets the same
+      # APK as this workflow does. The tag therefore only labels a version; this is
+      # what stops it labelling the wrong one, and stops a release going out whose
+      # store changelog would silently be missing.
+      - name: Check the tag matches build.gradle.kts
+        env:
+          NUMBER: ${{ steps.version.outputs.number }}
+        run: |
+          set -euo pipefail
+          GRADLE=app/build.gradle.kts
+          NAME=$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' "$GRADLE")
+          CODE=$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$GRADLE")
+          if [ "$(printf '%s\n' "$NAME" | grep -c .)" -ne 1 ] || [ "$(printf '%s\n' "$CODE" | grep -c .)" -ne 1 ]; then
+            echo "::error::Expected exactly one literal versionName and versionCode in $GRADLE, found name [$NAME] code [$CODE]"
+            exit 1
+          fi
+          if [ "$NAME" != "$NUMBER" ]; then
+            echo "::error::Tag android-v$NUMBER does not match versionName \"$NAME\" in $GRADLE"
+            exit 1
+          fi
+          CHANGELOG="../fastlane/metadata/android/en-US/changelogs/$CODE.txt"
+          if [ ! -s "$CHANGELOG" ]; then
+            echo "::error::No changelog for versionCode $CODE at ${CHANGELOG#../}"
+            exit 1
+          fi
+          echo "versionName $NAME matches the tag; versionCode $CODE has a changelog."
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
 
       - name: Unit tests
         run: ./gradlew testDebugUnitTest --no-daemon
 
       - name: Upload test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-results
           path: android/app/build/reports/tests/testDebugUnitTest/
           retention-days: 14
 
-      # Stamps versionName/versionCode from the tag, so the APK identifies itself as
-      # exactly the version being released.
       - name: Assemble release APK
-        env:
-          RELEASE_TAG: ${{ steps.version.outputs.number }}
         run: ./gradlew assembleRelease --no-daemon
 
       # The app's main privacy claim is that it asks for almost nothing. Assert that,
@@ -94,58 +132,95 @@ jobs:
           fi
           echo "Permission set unchanged."
 
+      - name: Hand the APK to the publish job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: apk-unsigned
+          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Sign and publish the APK
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Fetch the APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: apk-unsigned
+          path: unsigned
+
+      # apksigner is in the runner's Android SDK; this only fixes the Java it runs on.
+      - name: Set up JDK 17
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
       # Signing is optional so the workflow still works in a fork with no secrets:
       # without a keystore it publishes an unsigned APK and labels it as such.
-      - name: Decode keystore
+      #
+      # The `secrets` context cannot be used in a step-level `if`, so this step looks
+      # once and later steps decide on its output. That keeps every secret confined to
+      # the steps that actually use it.
+      - name: See whether a keystore is present
         id: keystore
-        if: env.KEYSTORE_BASE64 != ''
-        run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
-          echo "present=true" >> "$GITHUB_OUTPUT"
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: echo "present=$([ -n "$KEYSTORE_BASE64" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
+      # The passwords go to apksigner by environment variable name, not as pass:
+      # arguments, which any process on the runner could read from its command line.
       - name: Sign APK
         if: steps.keystore.outputs.present == 'true'
         env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          VERSION: ${{ steps.version.outputs.number }}
+          VERSION: ${{ needs.build.outputs.number }}
         run: |
           set -euo pipefail
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -r | head -1)
           [ -n "$APKSIGNER" ] || { echo "::error::apksigner not found"; exit 1; }
 
+          trap 'rm -f "$RUNNER_TEMP/release.jks"' EXIT
+          ( umask 077; printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks" )
+
           "$APKSIGNER" sign \
             --ks "$RUNNER_TEMP/release.jks" \
             --ks-key-alias "$KEY_ALIAS" \
-            --ks-pass "pass:$KEYSTORE_PASSWORD" \
-            --key-pass "pass:$KEY_PASSWORD" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
             --out "photo-sweep-${VERSION}.apk" \
-            app/build/outputs/apk/release/app-release-unsigned.apk
+            unsigned/app-release-unsigned.apk
 
           "$APKSIGNER" verify --verbose "photo-sweep-${VERSION}.apk"
-          rm -f "$RUNNER_TEMP/release.jks"
 
       - name: Stage unsigned APK
         if: steps.keystore.outputs.present != 'true'
         env:
-          VERSION: ${{ steps.version.outputs.number }}
+          VERSION: ${{ needs.build.outputs.number }}
         run: |
           echo "::warning::No signing secrets — publishing an unsigned APK, which Android will refuse to install."
-          cp app/build/outputs/apk/release/app-release-unsigned.apk \
-             "photo-sweep-${VERSION}-unsigned.apk"
+          cp unsigned/app-release-unsigned.apk "photo-sweep-${VERSION}-unsigned.apk"
 
       - name: Checksums
         run: sha256sum photo-sweep-*.apk | tee SHA256SUMS.txt
 
       - name: Publish release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           # Required for workflow_dispatch, where the run is not tag-triggered.
-          tag_name: ${{ steps.version.outputs.tag }}
+          tag_name: ${{ needs.build.outputs.tag }}
           files: |
-            android/photo-sweep-*.apk
-            android/SHA256SUMS.txt
+            photo-sweep-*.apk
+            SHA256SUMS.txt
           generate_release_notes: true
           body: |
             ## Install

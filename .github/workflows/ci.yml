@@ -8,13 +8,25 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # The release workflow runs all of this, the Nextcloud acceptance runs included,
+  # and signs nothing unless it passes. On a manual release github.ref is a branch,
+  # so the caller says which tag to test.
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Tag or commit to test; empty means the triggering ref'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
 
-# Cancel superseded runs on the same branch rather than queueing them.
+# Cancel superseded runs on the same branch rather than queueing them. The workflow
+# name is in the group because a called run inherits the caller's github context: a
+# manual release from main would otherwise cancel, or be cancelled by, CI on main.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -30,10 +42,13 @@ jobs:
         php: ['8.1', '8.4']
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Set up PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: ${{ matrix.php }}
           coverage: none
@@ -59,10 +74,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -84,7 +102,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       # Not on the runner image any more, and its absence fails the step with a
       # bare 127 that looks nothing like a schema problem.
@@ -123,10 +144,13 @@ jobs:
         nextcloud: ['31', '34']
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -143,6 +167,17 @@ jobs:
       - name: Acceptance run
         run: tests/integration/acceptance.sh ${{ matrix.nextcloud }} 8080
 
+      # The acceptance script removes its container on the way out, so it copies the
+      # server's log out first when anything failed. That copy is the only record.
       - name: Nextcloud log
         if: failure()
-        run: docker logs "photosweep-accept-${{ matrix.nextcloud }}" 2>&1 | tail -100 || true
+        run: tail -n 100 build/integration-logs/*.log || true
+
+      - name: Upload the Nextcloud log
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nextcloud-log-${{ matrix.nextcloud }}
+          path: build/integration-logs/
+          retention-days: 14
+          if-no-files-found: ignore
