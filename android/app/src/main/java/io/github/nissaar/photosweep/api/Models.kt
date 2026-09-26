@@ -166,7 +166,11 @@ data class RecordBatchResult(
 @Serializable
 data class ClearedResult(val cleared: Int = 0)
 
-/** One verdict waiting to reach the server. */
+/** Nextcloud core's description of the signed-in user; only the id is needed. */
+@Serializable
+data class CloudUser(val id: String)
+
+/** One verdict on its way to the server. */
 @Serializable
 data class PendingVerdict(
     @SerialName("fileId") val fileId: Long,
