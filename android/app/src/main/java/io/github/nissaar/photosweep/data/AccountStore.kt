@@ -6,6 +6,15 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.util.Log
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -16,6 +25,7 @@ private const val FILE = "photosweep-account"
 private const val KEY_SERVER = "server"
 private const val KEY_LOGIN = "login_name"
 private const val KEY_PASSWORD = "app_password"
+private const val KEY_USER_ID = "user_id"
 private const val TAG = "AccountStore"
 
 private const val KEYSTORE = "AndroidKeyStore"
@@ -24,8 +34,105 @@ private const val TRANSFORMATION = "AES/GCM/NoPadding"
 private const val IV_BYTES = 12
 private const val TAG_BITS = 128
 
+/** Who is signed in, as every screen sees it. */
+sealed interface AccountState {
+    /** The stored account is still being decrypted. */
+    data object Loading : AccountState
+
+    data object SignedOut : AccountState
+
+    data class SignedIn(val account: Account) : AccountState
+}
+
+/** Where an account is kept between runs. An interface so tests can use memory. */
+interface AccountStorage {
+    /** False when a saved account will not survive a restart. */
+    val isPersistent: Boolean
+
+    fun load(): Account?
+
+    fun save(account: Account)
+
+    fun clear()
+}
+
 /**
- * Where the app password lives.
+ * The one source of truth for who is signed in.
+ *
+ * Every screen derives its signed-in state from [state], and every way of being
+ * signed out — the user asking, or the server rejecting the password — ends here.
+ * Before, each screen kept its own flag, so one could be signed out while another
+ * still thought otherwise, and signing in again after a sign-out left the app on the
+ * login screen until it was restarted.
+ *
+ * Reading the stored account means Keystore work, which is slow enough on some
+ * devices to drop frames, so it happens off the main thread and [state] starts at
+ * [AccountState.Loading].
+ */
+class AccountStore(
+    private val storage: AccountStorage,
+    scope: CoroutineScope,
+    private val io: CoroutineDispatcher = Dispatchers.IO,
+) {
+
+    private val _state = MutableStateFlow<AccountState>(AccountState.Loading)
+    val state: StateFlow<AccountState> = _state.asStateFlow()
+
+    init {
+        scope.launch(io) {
+            val stored = storage.load()
+            _state.compareAndSet(
+                AccountState.Loading,
+                stored?.let { AccountState.SignedIn(it) } ?: AccountState.SignedOut,
+            )
+        }
+    }
+
+    /** False when this session's sign-in will not survive a restart. */
+    val isPersistent: Boolean get() = storage.isPersistent
+
+    fun current(): Account? = (_state.value as? AccountState.SignedIn)?.account
+
+    /** The account once the stored one has been read, or null if there is none. */
+    suspend fun awaitLoaded(): Account? =
+        (state.first { it !is AccountState.Loading } as? AccountState.SignedIn)?.account
+
+    suspend fun signIn(account: Account) {
+        withContext(io) { storage.save(account) }
+        _state.value = AccountState.SignedIn(account)
+    }
+
+    /**
+     * Replaces the stored details of the signed-in account, such as a user id fetched
+     * after the fact. Ignored if someone else has signed in since.
+     */
+    suspend fun update(account: Account) {
+        val previous = current() ?: return
+        if (previous.key != account.key) return
+        withContext(io) { storage.save(account) }
+        _state.compareAndSet(AccountState.SignedIn(previous), AccountState.SignedIn(account))
+    }
+
+    suspend fun signOut() {
+        withContext(io) { storage.clear() }
+        _state.value = AccountState.SignedOut
+    }
+
+    /**
+     * The server rejected [account]'s password: it has been revoked, or expired.
+     *
+     * Only signs out if that is still the account in use. A request that was already
+     * in flight for a previous account must not sign out the one that replaced it.
+     */
+    fun rejected(account: Account) {
+        if (_state.compareAndSet(AccountState.SignedIn(account), AccountState.SignedOut)) {
+            storage.clear()
+        }
+    }
+}
+
+/**
+ * Keeps the account in private preferences, encrypted.
  *
  * Every value is encrypted with an AES-256-GCM key held in the Android Keystore. The
  * key material never leaves the Keystore and this process cannot read it — what lands
@@ -40,47 +147,37 @@ private const val TAG_BITS = 128
  * session and never written to disk. Being asked to sign in again after a restart is a
  * far smaller cost than a credential sitting in clear text.
  */
-class AccountStore(context: Context) {
+class KeystoreAccountStorage(context: Context) : AccountStorage {
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
     /** Null when the Keystore is unusable, which is what keeps the password off disk. */
-    private val crypto: AccountCrypto? = AccountCrypto.open()
+    private val crypto: AccountCrypto? by lazy { AccountCrypto.open() }
 
-    /** False when this session's sign-in will not survive a restart. */
-    val isPersistent: Boolean get() = crypto != null
+    override val isPersistent: Boolean get() = crypto != null
 
-    @Volatile
-    private var cached: Account? = load()
-
-    fun current(): Account? = cached
-
-    fun isSignedIn(): Boolean = cached != null
-
-    fun save(account: Account) {
-        val cipher = crypto
-        if (cipher != null) {
-            prefs.edit()
-                .putString(KEY_SERVER, cipher.encrypt(account.server))
-                .putString(KEY_LOGIN, cipher.encrypt(account.loginName))
-                .putString(KEY_PASSWORD, cipher.encrypt(account.appPassword))
-                .apply()
-        }
-        cached = account
-    }
-
-    fun clear() {
-        prefs.edit().clear().apply()
-        cached = null
-    }
-
-    private fun load(): Account? {
+    override fun load(): Account? {
         val cipher = crypto ?: return null
         val server = read(cipher, KEY_SERVER) ?: return null
         val login = read(cipher, KEY_LOGIN) ?: return null
         val password = read(cipher, KEY_PASSWORD) ?: return null
-        return Account(server, login, password)
+        return Account(server, login, password, userId = read(cipher, KEY_USER_ID))
+    }
+
+    override fun save(account: Account) {
+        val cipher = crypto ?: return
+        val editor = prefs.edit()
+            .putString(KEY_SERVER, cipher.encrypt(account.server))
+            .putString(KEY_LOGIN, cipher.encrypt(account.loginName))
+            .putString(KEY_PASSWORD, cipher.encrypt(account.appPassword))
+        val userId = account.userId
+        if (userId != null) editor.putString(KEY_USER_ID, cipher.encrypt(userId)) else editor.remove(KEY_USER_ID)
+        editor.apply()
+    }
+
+    override fun clear() {
+        prefs.edit().clear().apply()
     }
 
     private fun read(cipher: AccountCrypto, key: String): String? =

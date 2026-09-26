@@ -2,18 +2,21 @@ package io.github.nissaar.photosweep.vm
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import io.github.nissaar.photosweep.Graph
 import io.github.nissaar.photosweep.api.NotSignedInException
 import io.github.nissaar.photosweep.api.ScanState
 import io.github.nissaar.photosweep.api.ServerConfig
 import io.github.nissaar.photosweep.api.Summary
+import io.github.nissaar.photosweep.data.AccountState
 
 data class AppState(
-    val signedIn: Boolean = false,
     val loading: Boolean = true,
     val summary: Summary = Summary(),
     val scan: ScanState = ScanState(),
@@ -27,36 +30,48 @@ data class AppState(
 }
 
 /**
- * Session-wide state: who is signed in, and how the server's index is doing.
+ * Session-wide state: how the server's index is doing, for whoever is signed in.
+ *
+ * Who is signed in is not decided here. It comes from
+ * [io.github.nissaar.photosweep.data.AccountStore], and this starts afresh whenever
+ * that changes, so nothing from one account is shown to the next.
  */
 class AppViewModel : ViewModel() {
 
-    private val _state = MutableStateFlow(AppState(signedIn = Graph.accounts.isSignedIn()))
+    private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
 
-    private var scanning = false
+    private var scanJob: Job? = null
 
     init {
-        if (_state.value.signedIn) refresh()
+        viewModelScope.launch {
+            Graph.accounts.state
+                .map { (it as? AccountState.SignedIn)?.account?.key }
+                .distinctUntilChanged()
+                .collect { key ->
+                    scanJob?.cancel()
+                    scanJob = null
+                    _state.value = AppState(loading = key != null)
+                    if (key != null) refresh()
+                }
+        }
     }
 
-    fun onSignedIn() {
-        _state.value = _state.value.copy(signedIn = true, loading = true, error = null)
-        refresh()
-    }
-
+    /** Signing out because the user asked; see [io.github.nissaar.photosweep.data.Session]. */
     fun signOut() {
-        Graph.accounts.clear()
-        _state.value = AppState(signedIn = false, loading = false)
+        Graph.session.signOut()
     }
 
     fun refresh() {
+        val key = Graph.accounts.current()?.key ?: return
         viewModelScope.launch {
             try {
                 // Anything given while offline goes first, so the numbers below it
                 // describe the same reality the user has been working in.
                 val drained = runCatching { Graph.repository.flushOutbox() }.getOrDefault(false)
                 val status = Graph.repository.status()
+                // An answer about an account that has since been signed out of.
+                if (Graph.accounts.current()?.key != key) return@launch
                 _state.value = _state.value.copy(
                     loading = false,
                     summary = status.summary,
@@ -67,16 +82,29 @@ class AppViewModel : ViewModel() {
                     error = null,
                 )
 
+                fetchUserIdIfMissing()
+
                 // Nothing indexed and no scan finished means a first run. Start one
                 // without being asked: an empty grid with a button on it is a worse
                 // first impression than months appearing as they are found.
                 if (!status.scan.complete && !status.scan.running) startScan(full = false)
             } catch (e: NotSignedInException) {
-                signOut()
+                // The account store has already signed out; the screen follows it.
             } catch (e: Exception) {
                 _state.value = _state.value.copy(loading = false, error = e.message)
             }
         }
+    }
+
+    /**
+     * Accounts stored before the app asked for the user id have none, and videos need
+     * it. The server has just answered, so this is a good moment to ask.
+     */
+    private suspend fun fetchUserIdIfMissing() {
+        val account = Graph.accounts.current() ?: return
+        if (account.userId != null) return
+        val userId = runCatching { Graph.api.userId(account) }.getOrNull() ?: return
+        Graph.accounts.update(account.copy(userId = userId))
     }
 
     /**
@@ -87,10 +115,9 @@ class AppViewModel : ViewModel() {
      * first scan into visible progress rather than a failure.
      */
     fun startScan(full: Boolean = false) {
-        if (scanning) return
-        scanning = true
+        if (scanJob?.isActive == true) return
 
-        viewModelScope.launch {
+        scanJob = viewModelScope.launch {
             try {
                 var guard = 0
                 do {
@@ -100,11 +127,9 @@ class AppViewModel : ViewModel() {
                     guard++
                 } while (!_state.value.scan.complete && guard < 500)
             } catch (e: NotSignedInException) {
-                signOut()
+                // Followed through the account store.
             } catch (e: Exception) {
                 _state.value = _state.value.copy(error = e.message)
-            } finally {
-                scanning = false
             }
         }
     }
@@ -120,7 +145,7 @@ class AppViewModel : ViewModel() {
             try {
                 _state.value = _state.value.copy(config = block(), error = null)
             } catch (e: NotSignedInException) {
-                signOut()
+                // Followed through the account store.
             } catch (e: Exception) {
                 _state.value = _state.value.copy(error = e.message)
             }
