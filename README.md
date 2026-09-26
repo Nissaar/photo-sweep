@@ -185,7 +185,7 @@ make dev-setup          # composer install && npm ci
 make build              # compile the frontend into js/
 make test               # coding standard, psalm, phpunit, eslint
 make package            # assemble build/photosweep/
-make appstore           # ... and sign and tar it
+make appstore NEXTCLOUD_ROOT=/path/to/nextcloud   # ... and sign and tar it
 ```
 
 The tests are plain unit tests — they run against the `nextcloud/ocp` stubs and need

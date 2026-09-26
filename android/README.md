@@ -103,12 +103,14 @@ Then add four repository secrets under **Settings → Secrets and variables → 
 
 | Secret | Value |
 |---|---|
-| `KEYSTORE_BASE64` | `base64 -w0 nextcloud-photo-sweep-release.jks` |
+| `KEYSTORE_BASE64` | `base64 -w0 photo-sweep-release.jks` |
 | `KEY_ALIAS` | the alias you chose |
 | `KEYSTORE_PASSWORD` | the password you chose |
 | `KEY_PASSWORD` | the same password (PKCS12 uses one for both) |
 
-Pushing an `android-v*` tag then builds, signs, checksums and publishes the APK.
+Pushing an `android-v*` tag then builds, signs, checksums and publishes the APK. The
+version itself is set in `app/build.gradle.kts`, and the tag has to match it; see
+[docs/ANDROID-PUBLISHING.md](../docs/ANDROID-PUBLISHING.md#setting-the-version).
 Without the secrets it still runs and publishes an **unsigned** APK, labelled as such,
 so forks work without configuration.
 

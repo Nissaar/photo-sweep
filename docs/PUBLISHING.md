@@ -108,18 +108,35 @@ with a warning. That is useful for testing the pipeline; the app store will refu
 ## 5. Release
 
 ```bash
-# 1. bump <version> in appinfo/info.xml and "version" in package.json
+# 1. bump <version> in appinfo/info.xml, then the same number in package.json and
+#    package-lock.json together:
+npm version --no-git-tag-version 1.0.1
 # 2. commit
 git tag v1.0.1
 git push origin v1.0.1
 ```
 
-The workflow then checks the tag against `info.xml` (a mismatch fails the build rather
-than shipping a mislabelled release), builds the frontend, assembles the package,
-signs its contents with `occ integrity:sign-app`, tars it, attaches it to the GitHub
-release, and posts the download URL and a detached signature to the app store API.
+The tag has to be exactly `v` and three plain numbers (`v1.0.1`, not `v1.0.1-rc1`).
+The workflow then checks it against `info.xml` (a mismatch fails the build rather
+than shipping a mislabelled release), builds the frontend and assembles the package.
+In parallel it runs the whole of CI against the tag, including the acceptance runs
+on real Nextcloud 31 and 34, and nothing is signed until all of that passes.
+
+Signing and publishing happen in a second job, the only one that sees the secrets.
+It runs no npm or composer at all: it signs the package's contents with
+`occ integrity:sign-app` in a Nextcloud image pinned by digest, tars it, attaches it
+to the GitHub release, and posts the download URL and a detached signature to the app
+store API.
+
+The tarball is reproducible: entries sorted, every timestamp set to the tagged
+commit's, owned by root, no name or time in the gzip header. Building the same tag
+twice gives the same bytes.
 
 ### Doing it by hand
+
+`NEXTCLOUD_ROOT` is a server directory, the one holding `occ`; `make appstore` stops
+with a message if it is missing. The tarball step needs GNU tar — on macOS install it
+and add `TAR=gtar`.
 
 ```bash
 make appstore NEXTCLOUD_ROOT=/path/to/nextcloud
@@ -127,10 +144,11 @@ openssl dgst -sha512 -sign ~/.nextcloud/certificates/photosweep.key \
         build/artifacts/photosweep-1.0.1.tar.gz | openssl base64 -A
 ```
 
-Then upload the tarball somewhere permanent and POST it:
+Then upload the tarball somewhere permanent and POST it. `--fail-with-body` shows the
+store's reason when it refuses the release:
 
 ```bash
-curl -X POST https://apps.nextcloud.com/api/v1/apps/releases \
+curl --fail-with-body -X POST https://apps.nextcloud.com/api/v1/apps/releases \
      -H "Authorization: Token $APP_STORE_TOKEN" \
      -H 'Content-Type: application/json' \
      -d '{"download": "https://…/photosweep-1.0.1.tar.gz", "signature": "…", "nightly": false}'
