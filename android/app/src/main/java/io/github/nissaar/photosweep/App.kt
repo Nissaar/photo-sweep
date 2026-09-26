@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.withContext
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import io.github.nissaar.photosweep.api.LoginFlow
 import io.github.nissaar.photosweep.api.PhotoSweepApi
@@ -102,6 +103,10 @@ class App : Application(), ImageLoaderFactory {
      */
     override fun newImageLoader(): ImageLoader {
         val client = Graph.http.newBuilder()
+            // A queue of its own. OkHttp runs at most five requests per host from one
+            // dispatcher, and the API now queues there too, so a screen full of
+            // thumbnails would otherwise hold up a verdict or an apply behind them.
+            .dispatcher(Dispatcher())
             .addInterceptor { chain ->
                 val account = Graph.accounts.current()
                 val request = chain.request()
