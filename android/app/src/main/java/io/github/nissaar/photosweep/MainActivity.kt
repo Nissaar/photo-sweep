@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.biometric.BiometricManager
@@ -49,7 +50,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -446,7 +446,7 @@ private fun SignedIn(accountKey: String) {
 private fun SignIn() {
     val loginViewModel: LoginViewModel = viewModel()
     val state by loginViewModel.state.collectAsState()
-    val activity = LocalContext.current as MainActivity
+    val activity = LocalActivity.current as MainActivity
 
     LaunchedEffect(state.openUrl) {
         state.openUrl?.let {

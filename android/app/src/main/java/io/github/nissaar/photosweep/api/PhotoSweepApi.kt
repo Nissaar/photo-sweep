@@ -60,8 +60,6 @@ class PhotoSweepApi(
 
     suspend fun applied(): DecisionsResponse = get("decisions/applied")
 
-    suspend fun config(): ServerConfig = get("config")
-
     // --- writes ------------------------------------------------------------
 
     /** Advances the server's index by one bounded chunk. */

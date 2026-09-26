@@ -154,8 +154,6 @@ class Repository(
 
     suspend fun resetMonth(yearMonth: String): ClearedResult = api.resetMonth(yearMonth)
 
-    suspend fun config(): ServerConfig = api.config()
-
     suspend fun setMode(mode: String): ServerConfig =
         api.updateConfig(buildJsonObject { put("mode", mode) })
 

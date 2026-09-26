@@ -182,8 +182,4 @@ class ReviewViewModel : ViewModel() {
             }
         }
     }
-
-    fun clearResult() {
-        _state.value = _state.value.copy(result = null, error = null)
-    }
 }
