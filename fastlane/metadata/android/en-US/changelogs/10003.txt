@@ -1,0 +1,6 @@
+Confirming now deletes only the photos on screen, and a delete that cannot go to
+the trash asks first. Keep and undo hold offline, and a changed verdict can no
+longer be lost. A revoked app password no longer crashes the app. Signing out
+revokes it on the server. The lock asks again after the app has been away, and
+videos pause in the background. Addresses like login.example.com work; http is
+refused.
