@@ -32,6 +32,8 @@ use OCP\AppFramework\Db\Entity;
  * @method void setAppliedAt(?int $appliedAt)
  * @method string|null getAppliedMode()
  * @method void setAppliedMode(?string $appliedMode)
+ * @method string|null getAppliedFolder()
+ * @method void setAppliedFolder(?string $appliedFolder)
  * @method int getTakenAt()
  * @method void setTakenAt(int $takenAt)
  * @method string getYearMonth()
@@ -64,6 +66,7 @@ class Decision extends Entity implements \JsonSerializable {
 	protected $applied = null;
 	protected $appliedAt = null;
 	protected $appliedMode = null;
+	protected $appliedFolder = null;
 	protected $takenAt = null;
 	protected $yearMonth = null;
 	protected $name = null;

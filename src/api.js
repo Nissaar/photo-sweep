@@ -21,6 +21,17 @@ const options = {
  */
 const data = (response) => response.data.ocs.data
 
+/**
+ * The stable code an OCS failure carries in its payload, such as `apply_running`.
+ *
+ * @param {Error} error what axios threw
+ * @return {string|null} the code, or null for anything that is not one
+ */
+export function errorCode(error) {
+	const code = error?.response?.data?.ocs?.data?.error
+	return typeof code === 'string' ? code : null
+}
+
 export default {
 	/** Index state, headline numbers and settings, in one call. */
 	async status() {
@@ -46,11 +57,11 @@ export default {
 	 */
 	async month(month, skipDecided = null) {
 		const params = skipDecided === null ? {} : { skipDecided }
-		return data(await axios.get(`${base}/months/${month}`, { ...options, params }))
+		return data(await axios.get(`${base}/months/${encodeURIComponent(month)}`, { ...options, params }))
 	},
 
 	async resetMonth(month) {
-		return data(await axios.delete(`${base}/months/${month}`, options))
+		return data(await axios.delete(`${base}/months/${encodeURIComponent(month)}`, options))
 	},
 
 	async record(fileId, verdict) {
@@ -76,9 +87,18 @@ export default {
 		return data(await axios.get(`${base}/decisions/applied`, options))
 	},
 
-	/** The only call that changes files. */
-	async apply() {
-		return data(await axios.post(`${base}/apply`, {}, options))
+	/**
+	 * The only call that changes files.
+	 *
+	 * The ids are the list the user was shown, so a verdict that arrived from another
+	 * device after the screen loaded is not carried out along with it.
+	 *
+	 * @param {number[]} fileIds the pending deletes the user confirmed
+	 * @param {boolean} permanent the user was told the trash is off and agreed anyway
+	 */
+	async apply(fileIds, permanent = false) {
+		const body = permanent ? { fileIds, permanent: true } : { fileIds }
+		return data(await axios.post(`${base}/apply`, body, options))
 	},
 
 	async restore(fileIds) {

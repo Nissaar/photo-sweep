@@ -25,22 +25,6 @@ class MediaMapper extends QBMapper {
 	}
 
 	/**
-	 * Writes an item to the index, replacing whatever was there before.
-	 *
-	 * Re-indexing has to be idempotent: the background job runs repeatedly, files get
-	 * rewritten, and the same file id must never produce two rows.
-	 */
-	public function upsert(Media $media): Media {
-		try {
-			$existing = $this->findByFileId($media->getUserId(), $media->getFileId());
-			$media->setId($existing->getId());
-			return $this->update($media);
-		} catch (DoesNotExistException $e) {
-			return $this->insert($media);
-		}
-	}
-
-	/**
 	 * @throws DoesNotExistException
 	 */
 	public function findByFileId(string $userId, int $fileId): Media {
@@ -78,6 +62,7 @@ class MediaMapper extends QBMapper {
 	/**
 	 * One month's items, newest first — the order the review deck consumes them in.
 	 *
+	 * @param int $limit 0 for no limit
 	 * @return Media[]
 	 */
 	public function findForMonth(string $userId, string $yearMonth, int $limit = 0, int $offset = 0): array {
@@ -162,6 +147,28 @@ class MediaMapper extends QBMapper {
 				->andWhere($qb->expr()->in('file_id', $qb->createNamedParameter($chunk, IQueryBuilder::PARAM_INT_ARRAY)));
 			$qb->executeStatement();
 		}
+	}
+
+	/**
+	 * Drops every item inside a folder, for when the folder itself is deleted.
+	 *
+	 * Deleting a folder raises one event for the folder and none for what was in it,
+	 * so without this its photos would stay in the grid until the next full pass.
+	 *
+	 * @param string $folderPath relative to the user's files, e.g. "/Photos/2019"
+	 * @return int rows removed
+	 */
+	public function removeUnderPath(string $userId, string $folderPath): int {
+		$prefix = rtrim($folderPath, '/') . '/';
+		if ($prefix === '/') {
+			// The whole library. Not something a folder delete can mean.
+			return 0;
+		}
+		$qb = $this->db->getQueryBuilder();
+		$qb->delete(self::TABLE)
+			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($userId)))
+			->andWhere($qb->expr()->like('path', $qb->createNamedParameter($this->db->escapeLikeParameter($prefix) . '%')));
+		return $qb->executeStatement();
 	}
 
 	/**

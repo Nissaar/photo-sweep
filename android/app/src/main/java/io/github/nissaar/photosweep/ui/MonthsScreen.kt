@@ -15,13 +15,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -40,6 +46,8 @@ fun MonthsScreen(
     onOpen: (String) -> Unit,
     onReopen: (String) -> Unit,
 ) {
+    var reopening by remember { mutableStateOf<MonthEntry?>(null) }
+
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(horizontal = 16.dp)) {
             Text(
@@ -47,6 +55,10 @@ fun MonthsScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            state.error?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
             Spacer(Modifier.height(12.dp))
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -98,12 +110,61 @@ fun MonthsScreen(
                         // Deliberately not a visible button: reopening a month is a
                         // rare, deliberate act, and a tappable target on every tile
                         // would be hit by accident far more often than on purpose.
-                        onLongClick = { onReopen(month.month) },
+                        // It erases verdicts, pending deletes included, so it asks
+                        // first rather than acting on a press that may have been an
+                        // accident.
+                        onLongClick = { reopening = month },
                     )
                 }
             }
         }
     }
+
+    reopening?.let { month ->
+        ReviewAgainDialog(
+            month = month.month,
+            verdicts = month.reviewed,
+            onConfirm = {
+                reopening = null
+                onReopen(month.month)
+            },
+            onDismiss = { reopening = null },
+        )
+    }
+}
+
+/**
+ * Asks before a month's verdicts are forgotten.
+ *
+ * @param verdicts how many the server counts for the month, or null when that is not
+ *   known on this screen
+ */
+@Composable
+fun ReviewAgainDialog(month: String, verdicts: Int?, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val what = when (verdicts) {
+        null -> "the verdicts you have given in this month that have"
+        1 -> "the 1 verdict you have given in this month that has"
+        else -> "the $verdicts verdicts you have given in this month that have"
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Review ${monthLabel(month)} again?") },
+        text = {
+            Text(
+                "This removes $what not been carried out " +
+                    "yet, including photos marked for deletion. Nothing in " +
+                    "Files changes, and photos already deleted or moved stay that way.",
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("Remove verdicts", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)

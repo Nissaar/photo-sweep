@@ -10,11 +10,13 @@ declare(strict_types=1);
 namespace OCA\PhotoSweep\AppInfo;
 
 use OCA\PhotoSweep\Listener\FileEventListener;
+use OCA\PhotoSweep\Listener\UserDeletedListener;
 use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
 use OCP\AppFramework\Bootstrap\IRegistrationContext;
 use OCP\Files\Events\Node\NodeDeletedEvent;
+use OCP\User\Events\UserDeletedEvent;
 
 class Application extends App implements IBootstrap {
 	public const APP_ID = 'photosweep';
@@ -35,6 +37,9 @@ class Application extends App implements IBootstrap {
 		// The class name is only a string here, so naming an app that may be disabled
 		// costs nothing: the event is simply never dispatched.
 		$context->registerEventListener(FileEventListener::NODE_RESTORED_EVENT, FileEventListener::class);
+
+		// An account's index and verdicts go with it.
+		$context->registerEventListener(UserDeletedEvent::class, UserDeletedListener::class);
 	}
 
 	public function boot(IBootContext $context): void {

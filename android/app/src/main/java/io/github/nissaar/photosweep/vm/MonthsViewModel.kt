@@ -2,6 +2,8 @@ package io.github.nissaar.photosweep.vm
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -46,6 +48,8 @@ class MonthsViewModel : ViewModel() {
     private val _state = MutableStateFlow(MonthsState())
     val state: StateFlow<MonthsState> = _state.asStateFlow()
 
+    private var loadJob: Job? = null
+
     init {
         load()
     }
@@ -54,8 +58,17 @@ class MonthsViewModel : ViewModel() {
         _state.value = _state.value.copy(filter = filter)
     }
 
-    fun load() {
-        viewModelScope.launch {
+    /**
+     * Fetches the grid again.
+     *
+     * Called every time the grid comes back into view. A load already under way
+     * answers that just as well, unless [force] says something has changed since it
+     * started.
+     */
+    fun load(force: Boolean = false) {
+        if (!force && loadJob?.isActive == true) return
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
             try {
                 val response = Graph.repository.months()
                 _state.value = _state.value.copy(
@@ -65,6 +78,9 @@ class MonthsViewModel : ViewModel() {
                     error = null,
                 )
             } catch (e: NotSignedInException) {
+                // The account store has signed out, and this screen goes with it.
+                // Re-throwing here used to take the whole process down.
+            } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _state.value = _state.value.copy(loading = false, error = e.message)
@@ -74,12 +90,21 @@ class MonthsViewModel : ViewModel() {
 
     /**
      * Forgets a month's verdicts so it can be gone through again.
-     * Local to the server's records — nothing in Files changes.
+     * Local to the server's records — nothing in Files changes. Asked for only after
+     * the user has confirmed, because it erases pending deletes too.
      */
     fun reopen(month: String) {
         viewModelScope.launch {
-            runCatching { Graph.repository.resetMonth(month) }
-            load()
+            try {
+                Graph.repository.resetMonth(month)
+            } catch (e: NotSignedInException) {
+                return@launch
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(error = e.message ?: "Could not reopen that month")
+            }
+            load(force = true)
         }
     }
 }

@@ -29,7 +29,7 @@ class Settings(
         val ALLOW_SCREENSHOTS = booleanPreferencesKey("allow_screenshots")
     }
 
-    /** Require biometric or device credential each time the app is opened. */
+    /** Require biometric or device credential each time the app comes to the front. */
     val appLock: Flow<Boolean> = context.dataStore.data.map { it[Keys.APP_LOCK] ?: false }
 
     /**
@@ -48,9 +48,5 @@ class Settings(
 
     private suspend fun <T> put(key: Preferences.Key<T>, value: T) {
         context.dataStore.edit { it[key] = value }
-    }
-
-    suspend fun clear() {
-        context.dataStore.edit { it.clear() }
     }
 }

@@ -65,7 +65,9 @@ fun ReviewScreen(
     mode: String,
     trashAvailable: Boolean,
     onKeepAfterAll: (Long) -> Unit,
-    onApply: () -> Unit,
+    /** The photos shown, and whether the user has agreed to a permanent delete. */
+    onApply: (List<Long>, Boolean) -> Unit,
+    onCancelPermanent: () -> Unit,
     onRestore: (Long) -> Unit,
 ) {
     var confirming by remember { mutableStateOf(false) }
@@ -205,17 +207,53 @@ fun ReviewScreen(
                 TextButton(
                     onClick = {
                         confirming = false
-                        onApply()
+                        // Exactly what this dialog was about, so the server does not
+                        // act on anything the user has not seen. With no trash, the
+                        // dialog has just said this cannot be undone, which is the
+                        // agreement to delete permanently.
+                        onApply(
+                            state.pending.map { it.fileId },
+                            mode == CleanupMode.TRASH && !trashAvailable,
+                        )
                     },
                 ) {
                     Text(
-                        if (mode == CleanupMode.TRASH) "Move to trash" else "Move to folder",
+                        when {
+                            mode != CleanupMode.TRASH -> "Move to folder"
+                            trashAvailable -> "Move to trash"
+                            else -> "Delete permanently"
+                        },
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
             },
             dismissButton = {
                 TextButton(onClick = { confirming = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    // The server found no trash when it came to it — disabled since this screen
+    // loaded, or never reported. It refuses to delete for good without asking, so ask.
+    state.confirmPermanent?.let { ids ->
+        AlertDialog(
+            onDismissRequest = onCancelPermanent,
+            title = { Text("Delete ${ids.size} photos permanently?") },
+            text = {
+                Text(
+                    "The trash app is not available on your server, so these files " +
+                        "would be deleted for good and could not be restored. Switch to " +
+                        "collecting them in a folder in Settings if you would rather check " +
+                        "them first.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { onApply(ids, true) }) {
+                    Text("Delete permanently", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onCancelPermanent) { Text("Cancel") }
             },
         )
     }

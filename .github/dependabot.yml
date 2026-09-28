@@ -37,9 +37,19 @@ updates:
       android:
         patterns: ['*']
         update-types: [minor, patch]
+    # Kotlin is held below 2.4.20 on purpose: the CodeQL extractor refuses anything
+    # newer, and the Kotlin security scan then silently stops running. Lift this when
+    # CodeQL supports it; commit c82af88 has the extractor error.
+    ignore:
+      - dependency-name: 'org.jetbrains.kotlin.*'
+        versions: ['>= 2.4.20']
+      - dependency-name: 'org.jetbrains.kotlin:*'
+        versions: ['>= 2.4.20']
 
-  # Workflows pin actions by major tag, so these are the updates that quietly change
-  # what runs with repository secrets. Worth seeing separately from library bumps.
+  # Workflows pin every action to a full commit SHA, with the release it came from in
+  # a trailing comment. A tag can be moved to other code; a SHA cannot, so nothing
+  # changes what runs next to the signing keys except one of these PRs, which bumps
+  # the SHA and the comment together. Worth seeing separately from library bumps.
   - package-ecosystem: github-actions
     directory: /
     schedule:

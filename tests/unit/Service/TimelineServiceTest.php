@@ -82,18 +82,71 @@ class TimelineServiceTest extends TestCase {
 		);
 	}
 
-	public function testReviewedNeverExceedsTheTotal(): void {
-		// Applied verdicts stay counted after their files leave the index, so the raw
-		// tally can legitimately run past what is left. Reporting "40 of 12 reviewed"
-		// would be worse than useless.
+	public function testAMonthWithUnjudgedPhotosIsNotDoneAfterApplying(): void {
+		// July had 52 photos; 40 were marked, the delete was applied, and the 12 that
+		// are left were never looked at. The applied rows are still in the decisions
+		// table as undo history, but their files have left the index, and the count
+		// is joined to the index — so it reports none of the 12 as reviewed. Counting
+		// the applied rows, and clamping 40 to 12, called the month finished and hid
+		// it from the grid.
 		$this->mediaMapper->method('monthCounts')->willReturn(['2024-07' => 12]);
-		$this->decisionMapper->method('decidedCountsByMonth')->willReturn(['2024-07' => 40]);
+		$this->decisionMapper->method('decidedCountsByMonth')->willReturn([]);
 
 		$months = $this->service->months('alice');
 
-		self::assertSame(12, $months[0]['reviewed']);
-		self::assertSame(0, $months[0]['remaining']);
-		self::assertTrue($months[0]['done']);
+		self::assertSame(0, $months[0]['reviewed']);
+		self::assertSame(12, $months[0]['remaining']);
+		self::assertFalse($months[0]['done']);
+	}
+
+	public function testDecidedItemsAreLookedUpByTheMonthTheyAreIndexedIn(): void {
+		// The mapper joins to the index, so a photo judged while filed under June and
+		// moved to July since (its EXIF read later) is skipped when July is opened.
+		$this->mediaMapper->method('findForMonth')->willReturn([$this->media(1), $this->media(2)]);
+		$this->decisionMapper->expects(self::once())
+			->method('decidedFileIdsForMonth')
+			->with('alice', '2024-07')
+			->willReturn([1]);
+
+		$items = $this->service->monthItems('alice', '2024-07', true);
+
+		self::assertSame([2], array_map(static fn (Media $m): int => $m->getFileId(), $items));
+	}
+
+	public function testResettingAMonthClearsByTheIndexedMonth(): void {
+		$this->decisionMapper->expects(self::once())
+			->method('clearUnappliedForMonth')
+			->with('alice', '2024-07')
+			->willReturn(3);
+
+		self::assertSame(3, $this->service->resetMonth('alice', '2024-07'));
+	}
+
+	public function testAMonthDeckIsBounded(): void {
+		$this->mediaMapper->expects(self::once())
+			->method('findForMonth')
+			->with('alice', '2024-07', TimelineService::MONTH_LIMIT)
+			->willReturn([]);
+
+		$this->service->monthItems('alice', '2024-07', false);
+	}
+
+	public function testTheLimitAppliesAfterJudgedItemsAreSkipped(): void {
+		// A month whose first MONTH_LIMIT photos had all been judged must still offer
+		// the ones after them, not come back empty.
+		$items = [];
+		for ($i = 1; $i <= TimelineService::MONTH_LIMIT + 3; $i++) {
+			$items[] = $this->media($i);
+		}
+		$this->mediaMapper->method('findForMonth')->willReturn($items);
+		$this->decisionMapper->method('decidedFileIdsForMonth')->willReturn(range(1, TimelineService::MONTH_LIMIT));
+
+		$left = $this->service->monthItems('alice', '2024-07', true);
+
+		self::assertSame(
+			[TimelineService::MONTH_LIMIT + 1, TimelineService::MONTH_LIMIT + 2, TimelineService::MONTH_LIMIT + 3],
+			array_map(static fn (Media $m): int => $m->getFileId(), $left),
+		);
 	}
 
 	public function testHidesItemsThatAlreadyHaveAVerdict(): void {

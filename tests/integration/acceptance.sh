@@ -13,7 +13,8 @@
 #
 #   Usage: tests/integration/acceptance.sh [nextcloud-version] [port]
 #
-# Set DOCKER=sudo\ docker where the daemon needs it.
+# Set DOCKER=sudo\ docker where the daemon needs it. On failure the server's log is
+# copied to LOG_DIR (default build/integration-logs) before the container goes.
 
 set -uo pipefail
 
@@ -23,6 +24,7 @@ CT="photosweep-accept-$VERSION"
 DOCKER="${DOCKER:-docker}"
 ADMIN_PASS="acceptance-pass-123"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LOG_DIR="${LOG_DIR:-$ROOT/build/integration-logs}"
 
 B="http://localhost:$PORT/ocs/v2.php/apps/photosweep/api/v1"
 A=(-u "admin:$ADMIN_PASS" -H OCS-APIRequest:true -H Accept:application/json -H Content-Type:application/json -s)
@@ -40,7 +42,21 @@ meta() { python3 -c "import json,sys; print(json.load(sys.stdin)['ocs']['meta'][
 sql()  { $DOCKER exec "$CT" php -r "\$d=new PDO('sqlite:/var/www/html/data/nextcloud.db'); echo \$d->query(\"$1\")->fetchColumn();"; }
 
 cleanup() { $DOCKER rm -f "$CT" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+
+# The container, and the log with it, is gone once this script exits, so whatever
+# looks at a failed run afterwards (CI uploads LOG_DIR) needs a copy taken first.
+# shellcheck disable=SC2329  # invoked by the trap below
+on_exit() {
+  local status=$?
+  if [ "$status" -ne 0 ]; then
+    mkdir -p "$LOG_DIR"
+    $DOCKER cp "$CT:/var/www/html/data/nextcloud.log" "$LOG_DIR/nextcloud-$VERSION.log" >/dev/null 2>&1 \
+      && echo "Server log copied to $LOG_DIR/nextcloud-$VERSION.log"
+    $DOCKER logs "$CT" >"$LOG_DIR/container-$VERSION.log" 2>&1 || true
+  fi
+  cleanup
+}
+trap on_exit EXIT
 
 step "0. Start a clean Nextcloud $VERSION"
 cleanup
@@ -72,13 +88,16 @@ echo "$OUT" | grep -q enabled && ok "app:enable" || bad "app:enable — $OUT"
 # without it, and every API call then answers 998 "invalid query". A real install goes
 # through Nextcloud itself and does not hit this, but the harness has to be
 # deterministic, so bounce the container and let the route table rebuild.
-$DOCKER restart "$CT" >/dev/null
-for _ in $(seq 1 60); do
-  curl -s -m 5 "http://localhost:$PORT/status.php" 2>/dev/null | grep -q '"installed":true' && break
-  sleep 3
-done
-curl -s -m 5 "http://localhost:$PORT/status.php" | grep -q '"installed":true' \
-  && ok "server came back after the restart" || bad "the server did not come back"
+bounce() {
+  $DOCKER restart "$CT" >/dev/null
+  for _ in $(seq 1 60); do
+    curl -s -m 5 "http://localhost:$PORT/status.php" 2>/dev/null | grep -q '"installed":true' && break
+    sleep 3
+  done
+  curl -s -m 5 "http://localhost:$PORT/status.php" | grep -q '"installed":true' \
+    && ok "server came back after the restart" || bad "the server did not come back"
+}
+bounce
 
 # Everything after this point must leave the log clean.
 $DOCKER exec "$CT" sh -c ': > /var/www/html/data/nextcloud.log'
@@ -96,7 +115,7 @@ for f in "$FIXTURES"/*; do
 done
 rm -rf "$FIXTURES"
 $DOCKER exec "$CT" chown -R www-data:www-data /var/www/html/data/admin/files/Photos
-occ files:scan admin >/dev/null && ok "files:scan"
+OUT=$(occ files:scan admin) && ok "files:scan" || bad "files:scan — $OUT"
 
 step "4. Index the library"
 OUT=$(occ photosweep:index admin --until-complete)
@@ -149,6 +168,12 @@ step "8. Undo a pending verdict"
 curl "${A[@]}" -X DELETE "$B/decisions/$B2" >/dev/null
 P=$(curl "${A[@]}" "$B/decisions/pending" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['ocs']['data']['decisions']))")
 check "pending after undo" "$P" "1"
+# Progress is counted by joining verdicts to the index, which only a real database
+# exercises: the keep is counted, the undone delete is not.
+REV=$(curl "${A[@]}" "$B/months" | python3 -c "
+import json,sys
+print([m['reviewed'] for m in json.load(sys.stdin)['ocs']['data']['months'] if m['month'] == '2012-06'][0])")
+check "reviewed in 2012-06" "$REV" "1"
 
 step "9. Trash mode: apply, then restore"
 curl "${A[@]}" -X POST "$B/apply" -d '{}' | grep -qE '"succeeded": *1' && ok "apply moved one file" || bad "apply"
@@ -182,6 +207,14 @@ curl "${A[@]}" -X POST "$B/apply" -d '{}' >/dev/null
 occ photosweep:index admin --full --until-complete >/dev/null
 IN=$(sql "SELECT COUNT(*) FROM oc_photosweep_media WHERE path LIKE '/To Be Deleted%'")
 check "indexed rows under the collection folder" "$IN" "0"
+# Changing the setting must not turn every photo already collected into a "restore".
+TF=$(curl "${A[@]}" -X PUT "$B/config" -d '{"targetFolder":"/Later"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['ocs']['data']['targetFolder'])")
+check "changed the collection folder" "$TF" "/Later"
+KEPT=$(curl "${A[@]}" "$B/decisions/applied" | python3 -c "import json,sys; print(sum(1 for d in json.load(sys.stdin)['ocs']['data']['decisions'] if d['fileId'] == $FID))")
+check "the collected photo keeps its undo" "$KEPT" "1"
+occ photosweep:index admin --full --until-complete >/dev/null
+IN=$(sql "SELECT COUNT(*) FROM oc_photosweep_media WHERE path LIKE '/To Be Deleted%'")
+check "the old collection folder stays out of the index" "$IN" "0"
 
 step "12. Bad input is refused"
 check "GET /months/2024-13"        "$(curl "${A[@]}" "$B/months/2024-13" | meta)" "400"
@@ -189,8 +222,84 @@ check "record an unknown fileId"   "$(curl "${A[@]}" -X POST "$B/decisions" -d '
 check "record an invalid verdict"  "$(curl "${A[@]}" -X POST "$B/decisions" -d "{\"fileId\":$FID,\"verdict\":\"maybe\"}" | meta)" "400"
 check "set an invalid mode"        "$(curl "${A[@]}" -X PUT "$B/config" -d '{"mode":"nonsense"}' | meta)" "400"
 check "unauthenticated request"    "$(curl -s -o /dev/null -w '%{http_code}' -H OCS-APIRequest:true "$B/months")" "401"
+check "a folder path with .."      "$(curl "${A[@]}" -X PUT "$B/config" -d '{"targetFolder":"/Photos/../Documents"}' | meta)" "400"
+check "collect into the library"   "$(curl "${A[@]}" -X PUT "$B/config" -d '{"targetFolder":"/","sourceFolder":"/"}' | meta)" "400"
 
-step "13. The background job runs"
+step "13. Apply acts only on the photos that were confirmed"
+first_id() { curl "${A[@]}" "$B/months/$1" | python3 -c "import json,sys; print(json.load(sys.stdin)['ocs']['data']['items'][0]['fileId'])"; }
+C1=$(first_id 2023-08)
+C2=$(first_id 2024-01)
+curl "${A[@]}" -X POST "$B/decisions" -d "{\"fileId\":$C1,\"verdict\":\"delete\"}" >/dev/null
+curl "${A[@]}" -X POST "$B/decisions" -d "{\"fileId\":$C2,\"verdict\":\"delete\"}" >/dev/null
+# The second verdict stands for one given on another device after this list loaded.
+curl "${A[@]}" -X POST "$B/apply" -d "{\"fileIds\":[$C1]}" | grep -qE '"succeeded": *1' \
+  && ok "apply with a list carried out one" || bad "apply with a list"
+LEFT=$(curl "${A[@]}" "$B/decisions/pending" | python3 -c "import json,sys; print(' '.join(str(d['fileId']) for d in json.load(sys.stdin)['ocs']['data']['decisions']))")
+check "the verdict not in the list is still pending" "$LEFT" "$C2"
+$DOCKER exec "$CT" ls /var/www/html/data/admin/files/Photos/ | grep -q Screenshot_20240103 \
+  && ok "the photo not in the list was not touched" || bad "the photo not in the list was moved"
+
+step "14. With the trash off, a permanent delete needs a yes"
+occ app:disable files_trashbin >/dev/null
+# Newer servers keep the list of enabled apps in the web server's memory cache, which
+# occ cannot reach, so the web side goes on believing the trash is there until it
+# restarts.
+bounce
+TA=$(curl "${A[@]}" "$B/index" | python3 -c "import json,sys; print(json.load(sys.stdin)['ocs']['data']['trashAvailable'])")
+check "the server reports the trash as off" "$TA" "False"
+curl "${A[@]}" -X PUT "$B/config" -d '{"mode":"trash"}' >/dev/null
+check "apply is refused" "$(curl "${A[@]}" -o /dev/null -w '%{http_code}' -X POST "$B/apply" -d '{}')" "409"
+ERR=$(curl "${A[@]}" -X POST "$B/apply" -d '{}' | python3 -c "import json,sys; print(json.load(sys.stdin)['ocs']['data']['error'])")
+check "the refusal says why" "$ERR" "trash_unavailable"
+$DOCKER exec "$CT" ls /var/www/html/data/admin/files/Photos/ | grep -q Screenshot_20240103 \
+  && ok "nothing was deleted" || bad "the photo was deleted anyway"
+curl "${A[@]}" -X DELETE "$B/decisions/$C2" >/dev/null
+occ app:enable files_trashbin >/dev/null
+bounce
+
+step "15. A second user, and a share between them"
+BOB_PASS="acceptance-bob-456"
+BA=(-u "bob:$BOB_PASS" -H OCS-APIRequest:true -H Accept:application/json -H Content-Type:application/json -s)
+$DOCKER exec -u www-data -e OC_PASS="$BOB_PASS" "$CT" php occ user:add --password-from-env bob >/dev/null 2>&1 \
+  && ok "created bob" || bad "could not create bob"
+# The first request sets up bob's home.
+curl "${BA[@]}" "$B/index" >/dev/null
+FIXTURES=$(mktemp -d)
+python3 "$ROOT/tests/integration/fixtures.py" "$FIXTURES" >/dev/null
+$DOCKER exec -u www-data "$CT" mkdir -p /var/www/html/data/bob/files/Holiday
+$DOCKER cp "$FIXTURES/IMG_20240712_140325.jpg" "$CT:/var/www/html/data/bob/files/Holiday/IMG_20240712_140325.jpg" >/dev/null
+rm -rf "$FIXTURES"
+$DOCKER exec "$CT" chown -R www-data:www-data /var/www/html/data/bob/files/Holiday
+occ files:scan bob >/dev/null
+SHARE=$(curl -s -u "bob:$BOB_PASS" -H OCS-APIRequest:true -H Accept:application/json \
+  -X POST "http://localhost:$PORT/ocs/v2.php/apps/files_sharing/api/v1/shares" \
+  -d path=/Holiday -d shareType=0 -d shareWith=admin -d permissions=31 | meta)
+check "bob shares /Holiday with admin, with delete rights" "$SHARE" "200"
+
+occ photosweep:index bob --until-complete >/dev/null
+BOBFID=$(sql "SELECT file_id FROM oc_photosweep_media WHERE user_id='bob' AND path='/Holiday/IMG_20240712_140325.jpg'")
+[ -n "$BOBFID" ] && ok "bob's photo is in bob's index ($BOBFID)" || bad "bob's photo is not in bob's index"
+
+occ photosweep:index admin --full --until-complete >/dev/null
+IN=$(sql "SELECT COUNT(*) FROM oc_photosweep_media WHERE user_id='admin' AND path LIKE '/Holiday%'")
+check "admin's index holds none of bob's shared photos" "$IN" "0"
+
+check "admin cannot mark bob's photo" \
+  "$(curl "${A[@]}" -X POST "$B/decisions" -d "{\"fileId\":$BOBFID,\"verdict\":\"delete\"}" | meta)" "404"
+curl "${A[@]}" -X POST "$B/apply" -d "{\"fileIds\":[$BOBFID]}" | grep -qE '"succeeded": *0' \
+  && ok "admin naming bob's photo in an apply does nothing" || bad "admin's apply acted on bob's photo"
+
+curl "${BA[@]}" -X POST "$B/decisions" -d "{\"fileId\":$BOBFID,\"verdict\":\"delete\"}" | grep -qE '"verdict": *"delete"' \
+  && ok "bob marks his own photo" || bad "bob could not mark his own photo"
+AP=$(curl "${A[@]}" "$B/decisions/pending" | python3 -c "import json,sys; print(sum(1 for d in json.load(sys.stdin)['ocs']['data']['decisions'] if d['fileId'] == $BOBFID))")
+check "bob's verdict is not in admin's pending list" "$AP" "0"
+curl "${A[@]}" -X POST "$B/apply" -d '{}' >/dev/null
+$DOCKER exec "$CT" ls /var/www/html/data/bob/files/Holiday/ | grep -q IMG_20240712 \
+  && ok "admin's apply left bob's photo alone" || bad "admin's apply deleted bob's photo"
+BP=$(curl "${BA[@]}" "$B/decisions/pending" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['ocs']['data']['decisions']))")
+check "bob's own pending list" "$BP" "1"
+
+step "16. The background job runs"
 JOB=$(sql "SELECT id FROM oc_jobs WHERE class LIKE '%PhotoSweep%'")
 if [ -n "$JOB" ]; then
   OUT=$(occ background-job:execute "$JOB" --force-execute)
@@ -199,7 +308,7 @@ else
   bad "the background job was never registered"
 fi
 
-step "14. The server's log is clean"
+step "17. The server's log is clean"
 ERRS=$($DOCKER exec "$CT" cat /var/www/html/data/nextcloud.log 2>/dev/null | python3 -c "
 import sys, json
 count = 0

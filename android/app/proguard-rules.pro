@@ -1,29 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Nissaar
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-# kotlinx.serialization generates serializers as companion objects and looks them up
-# reflectively; R8 cannot see those links and would strip them.
--keepattributes *Annotation*, InnerClasses
--dontnote kotlinx.serialization.**
--keepclassmembers class io.github.nissaar.photosweep.** {
-    *** Companion;
-}
--keepclasseswithmembers class io.github.nissaar.photosweep.** {
-    kotlinx.serialization.KSerializer serializer(...);
-}
--keep,includedescriptorclasses class io.github.nissaar.photosweep.api.**$$serializer { *; }
--keep,includedescriptorclasses class io.github.nissaar.photosweep.data.**$$serializer { *; }
-
-# Tink, pulled in by androidx.security.crypto, is compiled against ErrorProne
-# annotations that are not on the runtime classpath.
--dontwarn com.google.errorprone.annotations.**
--dontwarn javax.annotation.**
-
-# OkHttp references optional platform integrations that are not present on Android.
--dontwarn okhttp3.internal.platform.**
--dontwarn org.conscrypt.**
--dontwarn org.bouncycastle.**
--dontwarn org.openjsse.**
+# kotlinx.serialization and OkHttp ship their own R8 rules inside their jars, and
+# R8 applies them by itself. The copies that used to live here, and the Tink rules
+# left over from androidx.security.crypto, which the app no longer uses, only made
+# it harder to see which rules this app actually needs.
 
 # Release builds should carry no logging at all.
 -assumenosideeffects class android.util.Log {

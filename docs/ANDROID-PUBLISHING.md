@@ -40,9 +40,43 @@ Two of them, and both are set the moment you first publish:
   builds from source and signs with its own key, which is also why an app cannot be
   moved between F-Droid and Play installs without an uninstall.
 
-`versionCode` must increase on every release. It is derived from the tag in
-[app/build.gradle.kts](../android/app/build.gradle.kts), so the tag is the only place
-you set a version.
+`versionCode` must increase on every release, or the new APK will not install over the
+old one.
+
+## Setting the version
+
+The version is written as two literals in
+[app/build.gradle.kts](../android/app/build.gradle.kts):
+
+```kotlin
+versionCode = 10002
+versionName = "1.0.2"
+```
+
+Literals rather than something computed from the tag, because F-Droid builds from the
+tag with none of GitHub's environment — a version worked out from a variable only CI
+sets comes out as a dev version there. Written down, every build of a commit is the
+same version, whoever builds it.
+
+`versionCode` is `major × 10000 + minor × 100 + patch`, so 1.0.2 is 10002. Nothing
+computes it for you any more; keep to the scheme by hand.
+
+A release is then:
+
+1. Set `versionName` and `versionCode` in `app/build.gradle.kts`.
+2. Add `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt`.
+3. Commit, then tag `android-v<versionName>` and push the tag.
+
+The release workflow refuses the tag unless all of this agrees. It fails when:
+
+- the tag is not exactly `android-v` followed by three plain numbers — no suffixes, no
+  leading zeros, so `android-v1.0.3a` or `android-v1.0.3-rc1` goes nowhere;
+- the tag's version is not the `versionName` in `build.gradle.kts`, or there is not
+  exactly one literal `versionName` and `versionCode` to read;
+- there is no non-empty changelog file for that `versionCode`.
+
+It checks the tag only after tagging, so a mistake still costs a deleted and re-pushed
+tag. Nothing has been published at that point.
 
 ---
 
@@ -128,10 +162,43 @@ All already true here, but worth knowing why:
    linking the repository, or go straight to a merge request against
    [fdroiddata](https://gitlab.com/fdroid/fdroiddata) with a build recipe, which is
    faster if you are comfortable writing one.
-2. The recipe pins a tag and commit, and declares the Gradle task to run. Since the
-   version comes from the tag, keep tagging exactly as now.
+2. The recipe pins a tag and commit, and declares the Gradle task to run. See below.
 3. Expect **weeks to months**. The queue is volunteer-run. This is not a reason to
    delay the GitHub release.
+
+### The build recipe
+
+Roughly what the `fdroiddata` entry, `metadata/io.github.nissaar.photosweep.yml`,
+needs beyond the descriptive fields — check the field names against the current
+[build metadata reference](https://f-droid.org/docs/Build_Metadata_Reference/) when
+writing it:
+
+```yaml
+Builds:
+  - versionName: 1.0.2
+    versionCode: 10002
+    commit: android-v1.0.2
+    subdir: android/app
+    gradle:
+      - yes
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags ^android-v[0-9]+\.[0-9]+\.[0-9]+$
+CurrentVersion: 1.0.2
+CurrentVersionCode: 10002
+```
+
+- **`UpdateCheckMode: Tags` with the `android-v` pattern.** The server app is tagged
+  `v*` in the same repository. Without the pattern F-Droid's update checker would see
+  a server tag as a new client release.
+- **No `prebuild` step.** Because the version is a literal in `build.gradle.kts`,
+  F-Droid reads the right `versionName` and `versionCode` straight from the tagged
+  commit, and a plain Gradle build of that tag produces them. There is nothing to
+  patch in, and nothing to keep in step with the workflow.
+- **The `commit` must be a tag whose `build.gradle.kts` has the literals.** The tags
+  up to and including `android-v1.0.2` were cut while the version still came from a
+  CI-only variable, and build as a dev version anywhere else. The values above are
+  the current literals; the tag the recipe names has to be one made after that change.
 
 ### Making the listing good for free
 
@@ -152,7 +219,8 @@ fastlane/metadata/android/en-US/
 │       └── 04-settings.png
 └── changelogs/
     ├── 10000.txt               # the versionCode, not the version name
-    └── 10001.txt
+    ├── 10001.txt
+    └── 10002.txt               # one per release; CI refuses a tag without it
 ```
 
 **It has to be at the repository root**, not beside the Android sources. F-Droid's
@@ -160,9 +228,10 @@ scanner looks at the top level and at the Gradle module directory, and `android/
 is neither — with it there the bot reports "Fastlane was not found in your repo" and
 the listing gets no description or screenshots at all.
 
-A `changelogs/` file is named after the **versionCode**, which this project derives
-from the tag: 1.0.0 becomes 10000, 1.0.1 becomes 10001. Getting that wrong means the
-changelog silently does not appear.
+A `changelogs/` file is named after the **versionCode** set in `build.gradle.kts`:
+1.0.0 is 10000, 1.0.1 is 10001. Getting that wrong means the changelog silently does
+not appear, which is why the release workflow checks the file exists before it
+builds anything.
 
 ### What the scanner bot checks
 

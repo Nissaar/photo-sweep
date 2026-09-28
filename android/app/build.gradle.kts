@@ -7,27 +7,6 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-/**
- * The version comes from the release tag, so the tag, the APK and the published
- * release can never disagree. Locally (no RELEASE_TAG) it builds as a dev version.
- */
-val appVersionName: String =
-    (System.getenv("RELEASE_TAG")?.takeIf { it.isNotBlank() } ?: "v0.1.0-dev")
-        .removePrefix("v")
-        .removePrefix("android-")
-
-/**
- * Android decides what counts as an update purely from versionCode, and it must
- * increase every release or the new APK will not install over the old one.
- */
-val appVersionCode: Int = run {
-    val parts = appVersionName.substringBefore('-').split('.')
-    val major = parts.getOrNull(0)?.toIntOrNull() ?: 0
-    val minor = parts.getOrNull(1)?.toIntOrNull() ?: 0
-    val patch = parts.getOrNull(2)?.toIntOrNull() ?: 0
-    (major * 10_000) + (minor * 100) + patch
-}
-
 android {
     namespace = "io.github.nissaar.photosweep"
     compileSdk = 36
@@ -36,8 +15,18 @@ android {
         applicationId = "io.github.nissaar.photosweep"
         minSdk = 26
         targetSdk = 36
-        versionCode = appVersionCode
-        versionName = appVersionName
+        // Written out rather than derived from the release tag, so anyone building
+        // from a checkout gets the version the release did. F-Droid builds from the
+        // tag with no RELEASE_TAG in its environment, and a derived version came out
+        // as 0.1.0-dev. Kept as literals on these two lines because the release
+        // workflow and F-Droid's checkupdates both read them from here.
+        //
+        // The release workflow checks that the tag agrees with versionName and that
+        // a changelog exists for versionCode. Android decides what counts as an
+        // update purely from versionCode, so it must increase every release; the
+        // scheme is major * 10000 + minor * 100 + patch.
+        versionCode = 10002
+        versionName = "1.0.2"
     }
 
     buildTypes {
@@ -59,6 +48,13 @@ android {
         compose = true
         buildConfig = true
     }
+    // F-Droid's scanner flags the dependency list AGP embeds in the APK, which is
+    // encrypted for Google alone, and that blob also stops a rebuilt APK from
+    // matching the published one byte for byte.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     }
@@ -78,16 +74,15 @@ kotlin {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)
-    implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
-    implementation(libs.androidx.navigation.compose)
     debugImplementation(libs.androidx.ui.tooling)
 
     implementation(libs.androidx.biometric)

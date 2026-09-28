@@ -48,6 +48,8 @@ class ScanMapper extends QBMapper {
 		// silently dropped from the INSERT, which means the starting values have to
 		// be written here.
 		$scan->setCursorOffset(0);
+		$scan->setCursorMtime(0);
+		$scan->setCursorFileId(0);
 		$scan->setComplete(false);
 		$scan->setRunning(false);
 		$scan->setFound(0);

@@ -9,6 +9,7 @@ declare(strict_types=1);
 
 namespace OCA\PhotoSweep\Service;
 
+use OCA\PhotoSweep\Db\DecisionMapper;
 use OCA\PhotoSweep\Db\Media;
 use OCA\PhotoSweep\Db\MediaMapper;
 use OCA\PhotoSweep\Db\Scan;
@@ -17,6 +18,7 @@ use OCP\Files\File;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\NotFoundException;
+use OCP\IL10N;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -24,8 +26,8 @@ use Psr\Log\LoggerInterface;
  *
  * The scan is resumable by design. A first pass over a large library is minutes of
  * work, and it runs in a background job that can be cut short at any point, so
- * progress is written after every batch and picked up from a file-id cursor on the
- * next run. Losing the process costs one batch, never the whole scan.
+ * progress is written after every batch and picked up from a cursor on the next run.
+ * Losing the process costs one batch, never the whole scan.
  */
 class IndexService {
 
@@ -53,24 +55,24 @@ class IndexService {
 	 */
 	private const STALE_RUN_SECONDS = 1800;
 
+	/** The scan's error column. */
+	private const ERROR_BYTES = 255;
+
 	public function __construct(
 		private IRootFolder $rootFolder,
 		private MediaMapper $mediaMapper,
 		private ScanMapper $scanMapper,
+		private DecisionMapper $decisionMapper,
 		private MediaFinder $finder,
 		private DateResolver $dateResolver,
 		private ConfigService $configService,
+		private IL10N $l10n,
 		private LoggerInterface $logger,
 	) {
 	}
 
 	public function getStatus(string $userId): Scan {
 		return $this->scanMapper->findOrCreate($userId);
-	}
-
-	public function isIndexed(string $userId): bool {
-		$scan = $this->scanMapper->find($userId);
-		return $scan !== null && $scan->getComplete();
 	}
 
 	/**
@@ -97,23 +99,19 @@ class IndexService {
 
 		if ($full) {
 			$this->mediaMapper->removeAllForUser($userId);
-			$scan->setCursorOffset(0);
-			$scan->setFound(0);
-			$scan->setComplete(false);
+			self::rewind($scan);
 		}
 
 		// A completed index is refreshed by walking it again from the start rather than
 		// carrying on from where it stopped: resuming would only ever find new
 		// uploads and would never notice a file that left.
 		if ($scan->getComplete() && !$full) {
-			$scan->setCursorOffset(0);
-			$scan->setFound(0);
-			$scan->setComplete(false);
+			self::rewind($scan);
 		}
 
 		$scan->setRunning(true);
 		$scan->setError(null);
-		if ($scan->getCursorOffset() === 0) {
+		if ((int)$scan->getCursorFileId() === 0) {
 			$scan->setStartedAt($now);
 		}
 		$scan->setUpdatedAt($now);
@@ -127,7 +125,15 @@ class IndexService {
 				'userId' => $userId,
 				'app' => 'photosweep',
 			]);
-			$scan->setError(mb_substr($e->getMessage(), 0, 250));
+			// Shown to the user, so it says what happened rather than repeating a
+			// storage or database message that can carry server paths or SQL. The
+			// detail is in the log entry above. Cut by bytes, not characters: the
+			// column is 255 bytes, and 250 characters of anything but ASCII is not.
+			$scan->setError(mb_strcut(
+				$this->l10n->t('Your library could not be read. The server log has the details.'),
+				0,
+				self::ERROR_BYTES,
+			));
 		} finally {
 			$scan->setRunning(false);
 			$scan->setUpdatedAt(time());
@@ -137,6 +143,13 @@ class IndexService {
 		return $scan;
 	}
 
+	private static function rewind(Scan $scan): void {
+		$scan->setCursorMtime(0);
+		$scan->setCursorFileId(0);
+		$scan->setFound(0);
+		$scan->setComplete(false);
+	}
+
 	/**
 	 * @param null|callable(int, int): void $onProgress
 	 */
@@ -144,23 +157,29 @@ class IndexService {
 		$userFolder = $this->rootFolder->getUserFolder($userId);
 		$scope = $this->resolveScope($userFolder, $this->configService->getSourceFolder($userId));
 		$timezone = $this->configService->getTimeZone($userId);
-
-		// Whatever folder mode moves files into is not part of the library any more.
-		// Indexing it would put condemned photos back in front of the user, month
-		// after month, which is the one outcome that makes the feature useless.
-		$excludedPrefix = rtrim($this->configService->getTargetFolder($userId), '/') . '/';
+		$excludedPrefixes = $this->collectionPrefixes($userId);
 
 		$batches = 0;
 		while ($batches++ < $maxBatches) {
-			$files = $this->finder->findBatch($scope, $scan->getCursorOffset(), self::BATCH_SIZE);
+			$files = $this->finder->findBatch(
+				$scope,
+				(int)$scan->getCursorMtime(),
+				(int)$scan->getCursorFileId(),
+				self::BATCH_SIZE,
+			);
+			// Only an empty page ends the pass. A short one does not: the finder drops
+			// files the cursor has already passed, so a page can come back short with
+			// more still to come, and ending early would purge the rest as stale.
 			if ($files === []) {
 				$this->finishPass($userId, $scan);
 				break;
 			}
 
-			$indexed = $this->indexBatch($userId, $userFolder, $files, $timezone, $excludedPrefix);
+			$indexed = $this->indexBatch($userId, $userFolder, $files, $timezone, $excludedPrefixes);
 
-			$scan->setCursorOffset($scan->getCursorOffset() + count($files));
+			$last = $files[count($files) - 1];
+			$scan->setCursorMtime($last->getMTime());
+			$scan->setCursorFileId($last->getId());
 			$scan->setFound($scan->getFound() + $indexed);
 			$scan->setUpdatedAt(time());
 			// Written every batch: this is what makes the scan resumable, and what
@@ -169,11 +188,6 @@ class IndexService {
 
 			if ($onProgress !== null) {
 				$onProgress($scan->getFound(), count($files));
-			}
-
-			if (count($files) < self::BATCH_SIZE) {
-				$this->finishPass($userId, $scan);
-				break;
 			}
 		}
 	}
@@ -197,7 +211,48 @@ class IndexService {
 	}
 
 	/**
+	 * The folders whose contents are not part of the library, each with a trailing
+	 * slash so a prefix test cannot match "/To Be Deleted Later".
+	 *
+	 * Whatever folder mode moves files into is not part of the library any more.
+	 * Indexing it would put condemned photos back in front of the user, month after
+	 * month, which is the one outcome that makes the feature useless. That is the
+	 * folder set now, and every folder photos were collected into before the setting
+	 * was changed.
+	 *
+	 * @return string[]
+	 */
+	public function collectionPrefixes(string $userId): array {
+		$folders = $this->decisionMapper->appliedFolders($userId);
+		$folders[] = $this->configService->getTargetFolder($userId);
+
+		$prefixes = [];
+		foreach ($folders as $folder) {
+			$prefix = rtrim($folder, '/') . '/';
+			// The root would exclude everything. The setting cannot be the root, so
+			// this is only ever a damaged row, and it is safer ignored.
+			if ($prefix !== '/') {
+				$prefixes[$prefix] = true;
+			}
+		}
+		return array_keys($prefixes);
+	}
+
+	/**
+	 * @param string[] $prefixes
+	 */
+	public static function isUnderAny(string $relativePath, array $prefixes): bool {
+		foreach ($prefixes as $prefix) {
+			if (str_starts_with($relativePath, $prefix)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * @param File[] $files
+	 * @param string[] $excludedPrefixes
 	 * @return int how many were actually indexed
 	 */
 	private function indexBatch(
@@ -205,7 +260,7 @@ class IndexService {
 		Folder $userFolder,
 		array $files,
 		\DateTimeZone $timezone,
-		string $excludedPrefix,
+		array $excludedPrefixes,
 	): int {
 		$fileIds = array_map(static fn (File $f): int => $f->getId(), $files);
 		$metadata = $this->dateResolver->preloadMetadata($fileIds);
@@ -218,17 +273,13 @@ class IndexService {
 				if ($relativePath === null) {
 					continue;
 				}
-				if ($excludedPrefix !== '/' && str_starts_with($relativePath, $excludedPrefix)) {
+				if (self::isUnderAny($relativePath, $excludedPrefixes)) {
 					continue;
 				}
 
-				// Files shared with you and groupfolder mounts sit inside your folder
-				// but belong to someone else. Nextcloud would happily let you delete
-				// the ones you have write access to — and that delete removes the
-				// owner's only copy. Someone sweeping "2019" is tidying their own
-				// library, not agreeing to prune a colleague's.
-				$owner = $file->getOwner();
-				if ($owner === null || $owner->getUID() !== $userId) {
+				// Only the user's own files, on their own storage: never a share, a
+				// group folder or an external mount. See OwnFiles for why.
+				if (!OwnFiles::isOwn($file, $userId)) {
 					continue;
 				}
 
@@ -307,34 +358,16 @@ class IndexService {
 
 		$userFolder = $this->rootFolder->getUserFolder($userId);
 		$timezone = $this->configService->getTimeZone($userId);
-		$excludedPrefix = rtrim($this->configService->getTargetFolder($userId), '/') . '/';
 
 		$files = [];
 		foreach ($fileIds as $fileId) {
-			$node = null;
-			if (method_exists($userFolder, 'getFirstNodeById')) {
-				$node = $userFolder->getFirstNodeById($fileId);
-			} else {
-				$node = $userFolder->getById($fileId)[0] ?? null;
-			}
+			$node = $userFolder->getFirstNodeById($fileId);
 			if ($node instanceof File) {
 				$files[] = $node;
 			}
 		}
 
-		return $this->indexBatch($userId, $userFolder, $files, $timezone, $excludedPrefix);
-	}
-
-	/** Drops one file out of the index, for when it leaves the library. */
-	public function forget(string $userId, int $fileId): void {
-		$this->mediaMapper->removeByFileId($userId, $fileId);
-	}
-
-	/**
-	 * @param int[] $fileIds
-	 */
-	public function forgetMany(string $userId, array $fileIds): void {
-		$this->mediaMapper->removeByFileIds($userId, $fileIds);
+		return $this->indexBatch($userId, $userFolder, $files, $timezone, $this->collectionPrefixes($userId));
 	}
 
 	/** "2024-07", in the user's own timezone. */

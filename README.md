@@ -127,8 +127,8 @@ DELETE /ocs/v2.php/apps/photosweep/api/v1/months/2024-07   forget that month's v
 GET    /ocs/v2.php/apps/photosweep/api/v1/decisions/pending
 GET    /ocs/v2.php/apps/photosweep/api/v1/decisions/applied
 POST   /ocs/v2.php/apps/photosweep/api/v1/decisions        record one, or a batch
-DELETE /ocs/v2.php/apps/photosweep/api/v1/decisions/{id}   undo a pending verdict
-POST   /ocs/v2.php/apps/photosweep/api/v1/apply            carry out every pending delete
+DELETE /ocs/v2.php/apps/photosweep/api/v1/decisions/{fileId} undo a pending verdict
+POST   /ocs/v2.php/apps/photosweep/api/v1/apply            carry out pending deletes
 POST   /ocs/v2.php/apps/photosweep/api/v1/restore          bring applied items back
 GET    /ocs/v2.php/apps/photosweep/api/v1/config
 PUT    /ocs/v2.php/apps/photosweep/api/v1/config
@@ -137,6 +137,15 @@ PUT    /ocs/v2.php/apps/photosweep/api/v1/config
 `POST /decisions` accepts either `{fileId, verdict}` or `{verdicts: [{fileId, verdict}, …]}`.
 The batch form exists for offline clients: a review session on a train produces a
 hundred verdicts that should reach the server in one request, not a hundred.
+
+`POST /apply` takes an optional `{fileIds: [...], permanent: bool}`. With `fileIds` it
+carries out only the pending deletes in that list — send the list the user actually
+looked at, so a verdict that arrived from another device in the meantime is not carried
+out unseen. Without it, every pending delete is carried out. In trash mode on a server
+without `files_trashbin` the delete would be permanent, so the request is refused unless
+it says `permanent: true`. Refusals are HTTP 409 with a stable code in `data.error`:
+`trash_unavailable`, or `apply_running` when another apply for the same user has not
+finished. Nothing is touched in either case.
 
 Thumbnails come from core, not from this app:
 `/index.php/core/preview?fileId={id}&x=1024&y=1024&a=1`.
@@ -178,14 +187,14 @@ accounts should not be walking a thousand photo libraries because two people use
 
 ## Building and testing
 
-Requires PHP 8.1+ and Node 20+.
+Requires PHP 8.1+ and Node 22.14+.
 
 ```bash
 make dev-setup          # composer install && npm ci
 make build              # compile the frontend into js/
 make test               # coding standard, psalm, phpunit, eslint
 make package            # assemble build/photosweep/
-make appstore           # ... and sign and tar it
+make appstore NEXTCLOUD_ROOT=/path/to/nextcloud   # ... and sign and tar it
 ```
 
 The tests are plain unit tests — they run against the `nextcloud/ocp` stubs and need
