@@ -149,6 +149,11 @@ data class ApplyResult(
     val failures: List<Failure> = emptyList(),
     val targetFolder: String? = null,
     val error: String? = null,
+    /**
+     * The run stopped part-way, after some batches had gone through. Never sent by
+     * the server: the client adds the batches up and sets this itself.
+     */
+    val interrupted: Boolean = false,
 )
 
 @Serializable

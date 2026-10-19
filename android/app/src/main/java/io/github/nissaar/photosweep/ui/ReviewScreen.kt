@@ -110,6 +110,8 @@ fun ReviewScreen(
                     Note(
                         when {
                             result.error != null -> result.error
+                            result.interrupted ->
+                                "${result.succeeded} done, then it stopped. The rest is still waiting — try again."
                             result.failed > 0 -> "${result.succeeded} done, ${result.failed} could not be changed"
                             else -> "${result.succeeded} photos dealt with"
                         },
@@ -143,6 +145,10 @@ fun ReviewScreen(
                                     strokeWidth = 2.dp,
                                     color = MaterialTheme.colorScheme.onError,
                                 )
+                                state.progress?.let { (done, total) ->
+                                    Spacer(Modifier.size(8.dp))
+                                    Text("$done of $total")
+                                }
                             } else {
                                 Icon(Icons.Default.Delete, contentDescription = null, Modifier.size(18.dp))
                                 Spacer(Modifier.size(6.dp))

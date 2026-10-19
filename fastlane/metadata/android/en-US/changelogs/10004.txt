@@ -1,0 +1,4 @@
+Deleting a long list no longer times out. Photos are now sent to the server
+25 at a time, with progress shown, so two thousand photos go through in one
+tap. A batch that is interrupted is retried, and anything that did not go
+through stays on the list to try again.

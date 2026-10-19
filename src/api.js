@@ -6,6 +6,7 @@
 import { getCurrentUser } from '@nextcloud/auth'
 import axios from '@nextcloud/axios'
 import { generateOcsUrl, generateRemoteUrl, generateUrl } from '@nextcloud/router'
+import { applyInBatches } from './applyBatches.js'
 
 const base = generateOcsUrl('apps/photosweep/api/v1')
 
@@ -99,6 +100,22 @@ export default {
 	async apply(fileIds, permanent = false) {
 		const body = permanent ? { fileIds, permanent: true } : { fileIds }
 		return data(await axios.post(`${base}/apply`, body, options))
+	},
+
+	/**
+	 * Carries out the confirmed deletes in small requests, however many there are.
+	 *
+	 * @param {number[]} fileIds the pending deletes the user confirmed
+	 * @param {boolean} permanent the user was told the trash is off and agreed anyway
+	 * @param {(done: number, total: number) => void} onProgress told after each batch
+	 */
+	applyAll(fileIds, permanent = false, onProgress = () => {}) {
+		return applyInBatches({
+			fileIds,
+			onProgress,
+			errorCode,
+			send: (ids) => this.apply(ids, permanent),
+		})
 	},
 
 	async restore(fileIds) {

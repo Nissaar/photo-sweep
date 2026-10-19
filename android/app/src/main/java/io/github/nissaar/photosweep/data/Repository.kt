@@ -1,11 +1,15 @@
 package io.github.nissaar.photosweep.data
 
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import io.github.nissaar.photosweep.api.ApiError
 import io.github.nissaar.photosweep.api.ApiException
 import io.github.nissaar.photosweep.api.ApplyResult
 import io.github.nissaar.photosweep.api.ClearedResult
+import io.github.nissaar.photosweep.api.CleanupMode
 import io.github.nissaar.photosweep.api.DecisionsResponse
+import io.github.nissaar.photosweep.api.Failure
 import io.github.nissaar.photosweep.api.MediaItem
 import io.github.nissaar.photosweep.api.MonthResponse
 import io.github.nissaar.photosweep.api.MonthsResponse
@@ -17,6 +21,7 @@ import io.github.nissaar.photosweep.api.ScanResponse
 import io.github.nissaar.photosweep.api.ServerConfig
 import io.github.nissaar.photosweep.api.StatusResponse
 import io.github.nissaar.photosweep.api.Verdict
+import java.io.IOException
 
 /**
  * Everything the screens need, with the offline queue folded in.
@@ -145,10 +150,95 @@ class Repository(
     /**
      * Carries out the pending deletes the user confirmed, and no others.
      *
+     * Sent a few at a time, however many there are. Deleting takes about a second a
+     * photo on a busy server, so one request for two thousand outlives every proxy's
+     * timeout, the phone gives up while the server carries on, and the next tap runs
+     * into a deletion still in progress. Small requests each finish well inside any
+     * timeout.
+     *
+     * Throws if the first batch fails, so the caller can explain a refusal with
+     * nothing done. After that a failure ends the run with [ApplyResult.interrupted]
+     * set: what went through stays done and the rest is still pending.
+     *
      * The caller drains the queue and checks the list first: see
      * [io.github.nissaar.photosweep.vm.ReviewViewModel.apply].
+     *
+     * @param onProgress told how many of the photos have been dealt with after each batch
      */
-    suspend fun apply(fileIds: List<Long>, permanent: Boolean): ApplyResult = api.apply(fileIds, permanent)
+    suspend fun apply(
+        fileIds: List<Long>,
+        permanent: Boolean,
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    ): ApplyResult {
+        var mode: String? = null
+        var targetFolder: String? = null
+        var succeeded = 0
+        val failures = mutableListOf<Failure>()
+
+        for ((index, batch) in fileIds.chunked(APPLY_BATCH_SIZE).withIndex()) {
+            val result = try {
+                applyBatch(batch, permanent)
+            } catch (e: NotSignedInException) {
+                throw e
+            } catch (e: IOException) {
+                if (index == 0) throw e
+                return ApplyResult(
+                    mode = mode ?: CleanupMode.TRASH,
+                    succeeded = succeeded,
+                    failed = failures.size,
+                    failures = failures,
+                    targetFolder = targetFolder,
+                    interrupted = true,
+                )
+            }
+
+            mode = result.mode
+            targetFolder = result.targetFolder ?: targetFolder
+            succeeded += result.succeeded
+            failures += result.failures
+            if (result.error != null) {
+                // The server could not even start, and would say the same to the next
+                // batch.
+                return result.copy(succeeded = succeeded, failed = failures.size, failures = failures)
+            }
+            onProgress(minOf((index + 1) * APPLY_BATCH_SIZE, fileIds.size), fileIds.size)
+        }
+
+        return ApplyResult(
+            mode = mode ?: CleanupMode.TRASH,
+            succeeded = succeeded,
+            failed = failures.size,
+            failures = failures,
+            targetFolder = targetFolder,
+        )
+    }
+
+    /**
+     * One batch, sent again if it only failed for a reason that will pass.
+     *
+     * A batch that timed out on the phone is usually still running on the server, so
+     * its retry is told a deletion is in progress until it finishes. Sending it again
+     * is safe either way: the server only acts on photos that are still pending.
+     */
+    private suspend fun applyBatch(batch: List<Long>, permanent: Boolean): ApplyResult {
+        var attempt = 1
+        while (true) {
+            try {
+                return api.apply(batch, permanent)
+            } catch (e: NotSignedInException) {
+                throw e
+            } catch (e: IOException) {
+                if (attempt >= APPLY_ATTEMPTS || !isTransient(e)) throw e
+                attempt++
+                delay(APPLY_RETRY_DELAY_MS)
+            }
+        }
+    }
+
+    private fun isTransient(e: IOException): Boolean {
+        if (e !is ApiException) return true // a timeout or a dropped connection
+        return e.code == ApiError.APPLY_RUNNING || (e.code == null && e.status >= 500)
+    }
 
     suspend fun restore(fileIds: List<Long>): RestoreResult = api.restore(fileIds)
 
@@ -162,4 +252,14 @@ class Repository(
 
     suspend fun setSkipDecided(value: Boolean): ServerConfig =
         api.updateConfig(buildJsonObject { put("skipDecided", value) })
+
+    companion object {
+        /** Photos per apply request: each finishes well inside any proxy's timeout. */
+        const val APPLY_BATCH_SIZE = 25
+
+        /** Tries per batch before giving up on it. */
+        private const val APPLY_ATTEMPTS = 5
+
+        private const val APPLY_RETRY_DELAY_MS = 3000L
+    }
 }

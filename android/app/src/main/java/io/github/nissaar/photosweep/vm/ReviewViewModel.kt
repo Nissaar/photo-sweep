@@ -20,6 +20,8 @@ data class ReviewState(
     val applied: List<Decision> = emptyList(),
     val loading: Boolean = true,
     val applying: Boolean = false,
+    /** Photos dealt with so far in a run, and how many there are, while [applying]. */
+    val progress: Pair<Int, Int>? = null,
     val result: ApplyResult? = null,
     val error: String? = null,
     /** Verdicts still sitting in the outbox; the list below is incomplete while > 0. */
@@ -107,11 +109,12 @@ class ReviewViewModel : ViewModel() {
         if (_state.value.applying) return
 
         viewModelScope.launch {
-            _state.value = _state.value.copy(applying = true, result = null, error = null, confirmPermanent = null)
+            _state.value = _state.value.copy(applying = true, progress = null, result = null, error = null, confirmPermanent = null)
             try {
                 if (!Graph.repository.flushOutbox()) {
                     _state.value = _state.value.copy(
                         applying = false,
+                        progress = null,
                         queued = Graph.repository.queuedCount(),
                         error = "Some verdicts have not reached the server yet. Try again when you are connected.",
                     )
@@ -122,6 +125,7 @@ class ReviewViewModel : ViewModel() {
                 if (fresh.map { it.fileId }.toSet() != fileIds.toSet()) {
                     _state.value = _state.value.copy(
                         applying = false,
+                        progress = null,
                         pending = fresh,
                         queued = 0,
                         error = "The list changed since you confirmed. Check it and confirm again.",
@@ -129,31 +133,35 @@ class ReviewViewModel : ViewModel() {
                     return@launch
                 }
 
-                val result = Graph.repository.apply(fileIds, permanent)
-                _state.value = _state.value.copy(applying = false, result = result)
+                val result = Graph.repository.apply(fileIds, permanent) { done, total ->
+                    _state.value = _state.value.copy(progress = done to total)
+                }
+                _state.value = _state.value.copy(applying = false, progress = null, result = result)
                 load()
             } catch (e: NotSignedInException) {
-                _state.value = _state.value.copy(applying = false)
+                _state.value = _state.value.copy(applying = false, progress = null)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ApiException) {
                 when (e.code) {
                     ApiError.TRASH_UNAVAILABLE -> _state.value = _state.value.copy(
                         applying = false,
+                        progress = null,
                         confirmPermanent = fileIds,
                     )
                     ApiError.APPLY_RUNNING -> {
                         _state.value = _state.value.copy(
                             applying = false,
+                            progress = null,
                             error = "A deletion is already running for your account, from this " +
                                 "phone or the web. Wait for it to finish, then check the list again.",
                         )
                         load()
                     }
-                    else -> _state.value = _state.value.copy(applying = false, error = e.message)
+                    else -> _state.value = _state.value.copy(applying = false, progress = null, error = e.message)
                 }
             } catch (e: Exception) {
-                _state.value = _state.value.copy(applying = false, error = e.message)
+                _state.value = _state.value.copy(applying = false, progress = null, error = e.message)
             }
         }
     }

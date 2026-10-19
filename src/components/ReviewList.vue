@@ -58,7 +58,7 @@
 							<Delete v-else :size="20" />
 						</template>
 						{{ applying
-							? t('photosweep', 'Working…')
+							? (progress ? t('photosweep', 'Working… {done} of {total}', progress) : t('photosweep', 'Working…'))
 							: n('photosweep', 'Delete %n photo', 'Delete %n photos', pending.length) }}
 					</NcButton>
 					<span class="pc-review__total">{{ totalSize }}</span>
@@ -192,6 +192,8 @@ export default {
 			loading: true,
 			loadFailed: false,
 			applying: false,
+			/** How far a run has got, as { done, total }, or null before the first batch. */
+			progress: null,
 			confirming: false,
 			/** File ids with a take-out or restore request still out. */
 			busy: new Set(),
@@ -313,6 +315,7 @@ export default {
 		async apply() {
 			this.confirming = false
 			this.applying = true
+			this.progress = null
 			// Exactly what is on screen. Anything marked on another device since this
 			// list loaded stays pending until it has been looked at here.
 			const fileIds = this.pending.map((item) => item.fileId)
@@ -320,8 +323,16 @@ export default {
 				// `permanent` is only ever true once the dialog has said, in so many
 				// words, that this cannot be undone. The server refuses a permanent
 				// delete without it.
-				const result = await api.apply(fileIds, this.permanent)
-				if (result.error) {
+				const result = await api.applyAll(fileIds, this.permanent, (done, total) => {
+					this.progress = { done, total }
+				})
+				if (result.interrupted) {
+					// Some went through, then the connection or the server gave out. What
+					// is left is still pending, and the list shows exactly that.
+					showError(n('photosweep', '{done} done, then it stopped. %n photo is still waiting — try again.', '{done} done, then it stopped. %n photos are still waiting — try again.', fileIds.length - result.succeeded - result.failed, {
+						done: result.succeeded,
+					}))
+				} else if (result.error) {
 					// The server's own text can carry a path or an exception message,
 					// neither of which belongs in a toast.
 					showError(result.mode === 'folder'
@@ -340,6 +351,7 @@ export default {
 				await this.applyRefused(error)
 			} finally {
 				this.applying = false
+				this.progress = null
 			}
 		},
 
