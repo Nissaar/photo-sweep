@@ -93,6 +93,23 @@
 				@save="saveConfig"
 				@rebuild="rebuild" />
 		</NcAppContent>
+
+		<NcDialog
+			v-if="whatsNew"
+			:name="t('photosweep', 'What’s new in {version}', { version: whatsNew.version })"
+			size="small"
+			@closing="dismissWhatsNew">
+			<ul class="pc-whats-new">
+				<li v-for="note in whatsNew.notes" :key="note">
+					{{ note }}
+				</li>
+			</ul>
+			<template #actions>
+				<NcButton variant="primary" @click="dismissWhatsNew">
+					{{ t('photosweep', 'Got it') }}
+				</NcButton>
+			</template>
+		</NcDialog>
 	</NcContent>
 </template>
 
@@ -103,8 +120,10 @@ import { translate as t } from '@nextcloud/l10n'
 import NcAppContent from '@nextcloud/vue/components/NcAppContent'
 import NcAppNavigation from '@nextcloud/vue/components/NcAppNavigation'
 import NcAppNavigationItem from '@nextcloud/vue/components/NcAppNavigationItem'
+import NcButton from '@nextcloud/vue/components/NcButton'
 import NcContent from '@nextcloud/vue/components/NcContent'
 import NcCounterBubble from '@nextcloud/vue/components/NcCounterBubble'
+import NcDialog from '@nextcloud/vue/components/NcDialog'
 import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import CalendarMonth from 'vue-material-design-icons/CalendarMonth.vue'
 import Cog from 'vue-material-design-icons/Cog.vue'
@@ -115,6 +134,7 @@ import ReviewList from './components/ReviewList.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import SwipeDeck from './components/SwipeDeck.vue'
 import api from './api.js'
+import currentEntry, { lastSeen, markSeen } from './whatsNew.js'
 
 /** How long the counters wait for a run of swipes to settle before refreshing. */
 const SUMMARY_DEBOUNCE = 500
@@ -150,8 +170,10 @@ export default {
 		NcAppContent,
 		NcAppNavigation,
 		NcAppNavigationItem,
+		NcButton,
 		NcContent,
 		NcCounterBubble,
+		NcDialog,
 		NcLoadingIcon,
 		ReviewList,
 		SettingsPanel,
@@ -179,6 +201,8 @@ export default {
 
 			trashAvailable: loadState('photosweep', 'trashAvailable', true),
 			autoScanning: false,
+			/** The notes for this version, while they are on screen; otherwise null. */
+			whatsNew: null,
 		}
 	},
 
@@ -210,6 +234,7 @@ export default {
 	async mounted() {
 		await this.refreshAll()
 		this.loading = false
+		this.announceChanges()
 
 		// Nothing indexed yet means a first run. Start the scan without being asked:
 		// an empty month grid with a button on it is a worse first impression than
@@ -221,6 +246,30 @@ export default {
 
 	methods: {
 		t,
+
+		/**
+		 * Shows what changed, once per version, to people who already use the app.
+		 *
+		 * Nothing indexed means a first visit: there is no earlier version to have
+		 * changed from, so the version is only noted and the dialog is not shown.
+		 */
+		announceChanges() {
+			if (!currentEntry || lastSeen() === currentEntry.version) {
+				return
+			}
+			if (this.summary.indexed === 0) {
+				markSeen(currentEntry.version)
+				return
+			}
+			this.whatsNew = currentEntry
+		},
+
+		dismissWhatsNew() {
+			if (this.whatsNew) {
+				markSeen(this.whatsNew.version)
+			}
+			this.whatsNew = null
+		},
 
 		go(view) {
 			this.view = view
@@ -388,5 +437,15 @@ export default {
 	justify-content: center;
 	height: 100%;
 	min-height: 320px;
+}
+
+.pc-whats-new {
+	margin: 0;
+	padding-left: 20px;
+	list-style: disc;
+}
+
+.pc-whats-new li + li {
+	margin-top: 8px;
 }
 </style>

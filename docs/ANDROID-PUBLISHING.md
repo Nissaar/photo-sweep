@@ -64,7 +64,11 @@ computes it for you any more; keep to the scheme by hand.
 A release is then:
 
 1. Set `versionName` and `versionCode` in `app/build.gradle.kts`.
-2. Add `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt`.
+2. Add `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt`: a few plain
+   lines on what changed. The stores show it, the GitHub release carries it, and the
+   app shows it once in a "What's new" dialog the first time it opens after the
+   update (it is packaged as an asset, so it is one file). Stores cap it at 500
+   bytes.
 3. Commit, then tag `android-v<versionName>` and push the tag.
 
 The release workflow refuses the tag unless all of this agrees. It fails when:

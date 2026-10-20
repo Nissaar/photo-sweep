@@ -67,6 +67,7 @@ import io.github.nissaar.photosweep.ui.MonthsScreen
 import io.github.nissaar.photosweep.ui.ReviewScreen
 import io.github.nissaar.photosweep.ui.SettingsScreen
 import io.github.nissaar.photosweep.ui.SwipeScreen
+import io.github.nissaar.photosweep.ui.WhatsNewDialog
 import io.github.nissaar.photosweep.ui.monthLabel
 import io.github.nissaar.photosweep.ui.theme.PhotoSweepTheme
 import io.github.nissaar.photosweep.vm.AppViewModel
@@ -277,7 +278,11 @@ private fun Root() {
         // A moment while the stored account is decrypted; nothing to show yet.
         AccountState.Loading -> Box(Modifier.fillMaxSize())
 
-        AccountState.SignedOut -> SignIn()
+        AccountState.SignedOut -> {
+            // Someone who has not signed in has nothing to have seen change.
+            LaunchedEffect(Unit) { Graph.settings.setWhatsNewSeen(BuildConfig.VERSION_CODE) }
+            SignIn()
+        }
 
         // Keyed to the account, so a different account starts on fresh screens
         // instead of inheriting the last one's tabs, lists and open month.
@@ -304,6 +309,8 @@ private fun SignedIn(accountKey: String) {
     val allowScreenshots by Graph.settings.allowScreenshots.collectAsState(initial = false)
     val appLock by Graph.settings.appLock.collectAsState(initial = false)
     val scope = rememberCoroutineScope()
+
+    WhatsNewDialog()
 
     // Coming back from a month is a back gesture, not a button hunt.
     BackHandler(enabled = openMonth != null) { openMonth = null }

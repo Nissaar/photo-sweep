@@ -34,6 +34,7 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       number: ${{ steps.version.outputs.number }}
+      whatsnew: ${{ steps.notes.outputs.whatsnew }}
 
     steps:
       # The tag reaches the shell through env rather than being pasted into the
@@ -71,6 +72,21 @@ jobs:
             exit 1
           fi
           echo "Version $DECLARED matches the tag."
+
+      # People reading the release page, and the app's own "What's new" dialog, get
+      # their words from CHANGELOG.md. A version with no notes is not ready to ship.
+      - name: Read the release notes
+        id: notes
+        env:
+          NUMBER: ${{ steps.version.outputs.number }}
+        run: |
+          set -euo pipefail
+          NOTES=$(tools/release-notes.sh "$NUMBER")
+          {
+            echo 'whatsnew<<RELEASE_NOTES_EOF'
+            echo "$NOTES"
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
 
       # Tests, lint and the info.xml schema check are not repeated here: the ci job
       # below runs the whole of CI against this tag, and publish waits for it.
@@ -217,6 +233,10 @@ jobs:
             build/artifacts/SHA256SUMS.txt
           generate_release_notes: true
           body: |
+            ## What's new
+
+            ${{ needs.build.outputs.whatsnew }}
+
             ## Install
 
             Most people should install from the

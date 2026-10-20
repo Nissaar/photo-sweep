@@ -44,6 +44,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    sourceSets {
+        // The store changelogs double as the in-app "What's new", so the notes people
+        // read in F-Droid and on the phone are one file.
+        getByName("main").assets.srcDir("../../fastlane/metadata/android/en-US/changelogs")
+    }
     buildFeatures {
         compose = true
         buildConfig = true

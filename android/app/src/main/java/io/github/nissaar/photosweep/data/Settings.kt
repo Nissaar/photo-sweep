@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -27,6 +28,7 @@ class Settings(
     private object Keys {
         val APP_LOCK = booleanPreferencesKey("app_lock")
         val ALLOW_SCREENSHOTS = booleanPreferencesKey("allow_screenshots")
+        val WHATS_NEW_SEEN = intPreferencesKey("whats_new_seen")
     }
 
     /** Require biometric or device credential each time the app comes to the front. */
@@ -41,6 +43,11 @@ class Settings(
      */
     val allowScreenshots: Flow<Boolean> =
         context.dataStore.data.map { it[Keys.ALLOW_SCREENSHOTS] ?: false }
+
+    /** The versionCode whose notes were last shown, or null if none ever was. */
+    val whatsNewSeen: Flow<Int?> = context.dataStore.data.map { it[Keys.WHATS_NEW_SEEN] }
+
+    suspend fun setWhatsNewSeen(versionCode: Int) = put(Keys.WHATS_NEW_SEEN, versionCode)
 
     suspend fun setAppLock(value: Boolean) = put(Keys.APP_LOCK, value)
 

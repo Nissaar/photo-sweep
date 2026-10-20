@@ -111,10 +111,16 @@ with a warning. That is useful for testing the pipeline; the app store will refu
 # 1. bump <version> in appinfo/info.xml, then the same number in package.json and
 #    package-lock.json together:
 npm version --no-git-tag-version 1.0.1
-# 2. commit
+# 2. add a "## [1.0.1] - date" section to CHANGELOG.md: a few plain lines on what
+#    changed for people using the app
+# 3. commit
 git tag v1.0.1
 git push origin v1.0.1
 ```
+
+The changelog section is not optional: the workflow fails without it. It becomes the
+"What's new" at the top of the GitHub release, and the one-time dialog people see
+when they next open the app after updating.
 
 The tag has to be exactly `v` and three plain numbers (`v1.0.1`, not `v1.0.1-rc1`).
 The workflow then checks it against `info.xml` (a mismatch fails the build rather

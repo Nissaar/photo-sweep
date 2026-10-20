@@ -13,4 +13,11 @@ webpackConfig.entry = {
 	main: path.join(here, 'src', 'main.js'),
 }
 
+// The changelog is read into the bundle as text, so the "What's new" dialog shows
+// what the release page shows and the two cannot drift apart.
+webpackConfig.module.rules.push({
+	test: /CHANGELOG\.md$/,
+	type: 'asset/source',
+})
+
 export default webpackConfig

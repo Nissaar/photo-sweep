@@ -86,6 +86,7 @@ package: build
 	[ -d l10n ] && cp -r l10n $(package_dir)/ || true
 	cp COPYING $(package_dir)/
 	cp README.md $(package_dir)/
+	cp CHANGELOG.md $(package_dir)/
 
 # Signs the file listing inside the package. Needs a Nextcloud install to run occ
 # against; the release workflow does this inside the official image.

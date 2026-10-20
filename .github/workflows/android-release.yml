@@ -35,6 +35,7 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       number: ${{ steps.version.outputs.number }}
+      whatsnew: ${{ steps.check.outputs.whatsnew }}
 
     steps:
       # The tag reaches the shell through env rather than being pasted into the
@@ -67,6 +68,7 @@ jobs:
       # what stops it labelling the wrong one, and stops a release going out whose
       # store changelog would silently be missing.
       - name: Check the tag matches build.gradle.kts
+        id: check
         env:
           NUMBER: ${{ steps.version.outputs.number }}
         run: |
@@ -88,6 +90,11 @@ jobs:
             exit 1
           fi
           echo "versionName $NAME matches the tag; versionCode $CODE has a changelog."
+          {
+            echo 'whatsnew<<RELEASE_NOTES_EOF'
+            cat "$CHANGELOG"
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 17
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
@@ -223,6 +230,10 @@ jobs:
             SHA256SUMS.txt
           generate_release_notes: true
           body: |
+            ## What's new
+
+            ${{ needs.build.outputs.whatsnew }}
+
             ## Install
 
             Download the APK below and open it on your phone. Android will ask you to
