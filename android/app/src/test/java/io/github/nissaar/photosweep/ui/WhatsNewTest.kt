@@ -15,3 +15,13 @@ class WhatsNewTest {
         )
     }
 }
+
+class FolderOfTest {
+
+    @Test
+    fun `folder is the path without the file name`() {
+        assertEquals("/Photos/2024/Trip", folderOf("Photos/2024/Trip/IMG_1.jpg"))
+        assertEquals("/Photos", folderOf("/Photos/IMG_1.jpg"))
+        assertEquals("/", folderOf("IMG_1.jpg"))
+    }
+}

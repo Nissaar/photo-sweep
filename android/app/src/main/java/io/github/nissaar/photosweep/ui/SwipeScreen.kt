@@ -100,7 +100,6 @@ fun SwipeScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column {
@@ -117,12 +116,6 @@ fun SwipeScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            }
-
-            TextButton(onClick = onUndo, enabled = state.history.isNotEmpty()) {
-                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null, Modifier.size(18.dp))
-                Spacer(Modifier.size(4.dp))
-                Text("Undo")
             }
         }
 
@@ -166,7 +159,8 @@ fun SwipeScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Button(
                     onClick = onDelete,
@@ -179,6 +173,36 @@ fun SwipeScreen(
                     Icon(Icons.Default.Delete, contentDescription = null, Modifier.size(18.dp))
                     Spacer(Modifier.size(6.dp))
                     Text("Delete")
+                }
+
+                // Undo sits between the two verdicts, with the name and folder of the
+                // photo they are about to be given to.
+                state.current?.let { current ->
+                    Column(
+                        modifier = Modifier.weight(1.4f),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        TextButton(onClick = onUndo, enabled = state.history.isNotEmpty()) {
+                            Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null, Modifier.size(18.dp))
+                            Spacer(Modifier.size(4.dp))
+                            Text("Undo")
+                        }
+                        Text(
+                            current.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            folderOf(current.path),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            // The end of a path is the part that tells folders apart.
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
 
                 Button(
@@ -336,6 +360,11 @@ private fun Stamp(label: String, colour: Color, alignment: Alignment, rotation: 
 
 @Composable
 private fun Caption(item: MediaItem, modifier: Modifier = Modifier) {
+    val detail = listOf(dateLabel(item.takenAt), sizeLabel(item.size))
+        .filter { it.isNotEmpty() }
+        .joinToString(" · ")
+    if (detail.isEmpty()) return
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -343,21 +372,18 @@ private fun Caption(item: MediaItem, modifier: Modifier = Modifier) {
             .padding(horizontal = 14.dp, vertical = 10.dp),
     ) {
         Text(
-            item.name,
+            detail,
             color = Color.White,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            listOf(dateLabel(item.takenAt), sizeLabel(item.size))
-                .filter { it.isNotEmpty() }
-                .joinToString(" · "),
-            color = Color.White.copy(alpha = 0.8f),
             style = MaterialTheme.typography.bodySmall,
         )
     }
+}
+
+/** The folder a file is in, as a path from the top of the library. */
+internal fun folderOf(path: String): String {
+    val trimmed = path.trimStart('/')
+    val slash = trimmed.lastIndexOf('/')
+    return if (slash == -1) "/" else "/" + trimmed.substring(0, slash)
 }
 
 @Composable

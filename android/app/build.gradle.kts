@@ -25,8 +25,8 @@ android {
         // a changelog exists for versionCode. Android decides what counts as an
         // update purely from versionCode, so it must increase every release; the
         // scheme is major * 10000 + minor * 100 + patch.
-        versionCode = 10004
-        versionName = "1.0.4"
+        versionCode = 10005
+        versionName = "1.0.5"
     }
 
     buildTypes {

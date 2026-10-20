@@ -1,0 +1,3 @@
+Undo now sits between Delete and Keep, with the photo's name and folder, so you
+can see where it lives before you decide. A "What's new" note appears once after
+each update.

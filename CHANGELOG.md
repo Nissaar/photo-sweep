@@ -4,6 +4,12 @@ Short notes on what changed for people using Photo Sweep. The newest version goe
 first, and its section is what the release page and the in-app "What's new" show.
 Android has its own, in `fastlane/metadata/android/en-US/changelogs/`.
 
+## [1.0.6] - 2026-10-20
+
+- Undo now sits between Delete and Keep, with the photo's name and folder, so you can
+  see where it lives before you decide.
+- A "What's new" note appears once after each update.
+
 ## [1.0.5] - 2026-10-19
 
 - Deleting a long list no longer times out. Photos are sent 25 at a time and

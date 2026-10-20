@@ -20,15 +20,8 @@
 				</span>
 			</div>
 
-			<NcButton
-				variant="tertiary"
-				:disabled="!history.length"
-				@click="undo">
-				<template #icon>
-					<UndoVariant :size="20" />
-				</template>
-				{{ t('photosweep', 'Undo') }}
-			</NcButton>
+			<!-- Balances the Months button so the title stays centred. -->
+			<span class="pc-deck__bar-spacer" aria-hidden="true" />
 		</div>
 
 		<NcProgressBar :value="progress" size="medium" :aria-label="t('photosweep', 'Progress through this month')" />
@@ -138,7 +131,6 @@
 				</span>
 
 				<div class="pc-card__meta">
-					<span class="pc-card__name" :title="current.path">{{ current.name }}</span>
 					<span class="pc-card__detail" :title="sourceHint">
 						{{ date(current.takenAt, timeZone) }} · {{ size(current.size) }}
 					</span>
@@ -157,6 +149,23 @@
 				</template>
 				{{ t('photosweep', 'Delete') }}
 			</NcButton>
+
+			<!-- Undo sits between the two verdicts, with the name and folder of the
+			     photo they are about to be given to. -->
+			<div class="pc-deck__middle">
+				<NcButton
+					variant="tertiary"
+					:disabled="!history.length"
+					@click="undo">
+					<template #icon>
+						<UndoVariant :size="20" />
+					</template>
+					{{ t('photosweep', 'Undo') }}
+				</NcButton>
+				<span class="pc-deck__name" :title="current.path">{{ current.name }}</span>
+				<span v-if="folder" class="pc-deck__path" :title="current.path">{{ folder }}</span>
+			</div>
+
 			<NcButton variant="success" wide @click="decide('keep')">
 				<template #icon>
 					<Check :size="20" />
@@ -328,6 +337,13 @@ export default {
 
 		next() {
 			return this.items[this.index + 1] ?? null
+		},
+
+		/** The folder the current file is in, as a path from the top of the library. */
+		folder() {
+			const path = String(this.current?.path ?? '').replace(/^\/+/, '')
+			const slash = path.lastIndexOf('/')
+			return slash === -1 ? '/' : '/' + path.slice(0, slash)
 		},
 
 		finished() {
@@ -788,10 +804,15 @@ export default {
 }
 
 .pc-deck__bar {
-	display: flex;
+	/* Equal outer columns keep the title centred whatever the Months button says. */
+	display: grid;
+	grid-template-columns: 1fr auto 1fr;
 	align-items: center;
-	justify-content: space-between;
 	gap: 8px;
+}
+
+.pc-deck__bar > :first-child {
+	justify-self: start;
 }
 
 .pc-deck__title {
@@ -912,24 +933,45 @@ export default {
 	pointer-events: none;
 }
 
-.pc-card__name {
-	font-weight: 600;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
 .pc-card__detail {
 	font-size: 0.85em;
 	opacity: 0.85;
 }
 
 .pc-deck__actions {
-	display: flex;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) minmax(0, 1fr);
+	align-items: center;
 	gap: 12px;
-	max-width: 560px;
+	max-width: 720px;
 	width: 100%;
 	margin: 0 auto;
+}
+
+.pc-deck__middle {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	min-width: 0;
+	text-align: center;
+	line-height: 1.3;
+}
+
+.pc-deck__name {
+	max-width: 100%;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.pc-deck__path {
+	max-width: 100%;
+	font-size: 0.85em;
+	color: var(--color-text-maxcontrast);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .pc-deck__choices {
