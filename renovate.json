@@ -1,0 +1,88 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "timezone": "Indian/Mauritius",
+  "schedule": [
+    "before 7am on the first day of the month"
+  ],
+  "assignees": [
+    "Nissaar"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "semanticCommits": "enabled",
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
+  "prConcurrentLimit": 5,
+  "automerge": false,
+  "dependencyDashboard": true,
+  "packageRules": [
+    {
+      "description": "One PR for all frontend minor and patch updates; majors stay separate",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "frontend minor and patch updates"
+    },
+    {
+      "description": "One PR for all php tooling minor and patch updates; majors stay separate",
+      "matchManagers": [
+        "composer"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "php tooling minor and patch updates"
+    },
+    {
+      "description": "One PR for all android minor and patch updates; majors stay separate",
+      "matchManagers": [
+        "gradle"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "android minor and patch updates"
+    },
+    {
+      "description": "One PR for all github actions minor and patch updates; majors stay separate",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest",
+        "pin",
+        "pinDigest"
+      ],
+      "groupName": "github actions minor and patch updates"
+    },
+    {
+      "description": "Label majors so they stand out; read the release notes before merging",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "addLabels": [
+        "major"
+      ]
+    },
+    {
+      "description": "Kotlin is held below 2.4.20: the CodeQL extractor refuses anything newer and the Kotlin security scan then silently stops running. Lift when CodeQL supports it (commit c82af88).",
+      "matchPackageNames": [
+        "/^org\\.jetbrains\\.kotlin/"
+      ],
+      "allowedVersions": "<2.4.20"
+    }
+  ]
+}
