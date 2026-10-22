@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "io.github.nissaar.photosweep"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "io.github.nissaar.photosweep"
