@@ -15,7 +15,7 @@
 		"doctrine/dbal": "^3.9",
 		"nextcloud/coding-standard": "^1.3",
 		"nextcloud/ocp": "^31.0",
-		"phpunit/phpunit": "^9.6",
+		"phpunit/phpunit": "^13.0",
 		"vimeo/psalm": "^5.26"
 	},
 	"autoload": {
