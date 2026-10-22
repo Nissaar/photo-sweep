@@ -96,6 +96,34 @@
         "major"
       ],
       "enabled": false
+    },
+    {
+      "description": "dbal 4 needs PHP 8.2 and the app supports PHP 8.1; it is also only the dev-time typing for the Nextcloud 31 baseline.",
+      "matchPackageNames": [
+        "doctrine/dbal"
+      ],
+      "allowedVersions": "<4"
+    },
+    {
+      "description": "phpunit 11+ needs PHP 8.2 or newer (13 needs 8.4) and the app supports PHP 8.1.",
+      "matchPackageNames": [
+        "phpunit/phpunit"
+      ],
+      "allowedVersions": "<11"
+    },
+    {
+      "description": "@nextcloud/webpack-vue-config declares a peer dependency on webpack-cli ^6; lift when it allows 7.",
+      "matchPackageNames": [
+        "webpack-cli"
+      ],
+      "allowedVersions": "<7"
+    },
+    {
+      "description": "4.1.0 fails the webpack build (cannot resolve node-stdlib-browser/cjs/proxy/process); lift when fixed upstream.",
+      "matchPackageNames": [
+        "node-polyfill-webpack-plugin"
+      ],
+      "allowedVersions": "<4.1.0"
     }
   ],
   "constraints": {
