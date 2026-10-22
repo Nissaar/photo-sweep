@@ -72,7 +72,7 @@ jobs:
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '25'
 
       # Caching is switched off for this job alone. CodeQL extracts Kotlin by
       # watching the compiler run, so a cache hit is indistinguishable from an empty
