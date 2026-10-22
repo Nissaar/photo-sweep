@@ -86,6 +86,19 @@
         "/^org\\.jetbrains\\.kotlin/"
       ],
       "allowedVersions": "<2.4.20"
+    },
+    {
+      "description": "nextcloud/ocp major follows the supported Nextcloud range (31-34, see appinfo/info.xml and the CI matrix). Bump deliberately when that range changes.",
+      "matchPackageNames": [
+        "nextcloud/ocp"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
     }
-  ]
+  ],
+  "constraints": {
+    "npm": "^10"
+  }
 }
