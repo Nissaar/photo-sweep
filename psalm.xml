@@ -24,6 +24,12 @@
 		<MissingDependency errorLevel="suppress"/>
 
 		<!--
+			Psalm 6 wants #[\Override] on every overriding method. That attribute
+			arrived in PHP 8.3 and the app still runs on 8.1, so it is not asked for.
+		-->
+		<MissingOverrideAttribute errorLevel="suppress"/>
+
+		<!--
 			MediaFinder and TrashService reach into OC\ and OCA\Files_Trashbin on
 			purpose — there is no public way to build a paged search query or restore
 			a trashed file — and both degrade gracefully when those are absent.
