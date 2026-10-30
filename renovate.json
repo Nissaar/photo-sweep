@@ -124,6 +124,13 @@
         "node-polyfill-webpack-plugin"
       ],
       "allowedVersions": "<4.1.0"
+    },
+    {
+      "description": "Never update values inside renovate.json itself. The npm pin (constraints.npm = ^10) is deliberate: npm 12 refuses these lockfiles (EALLOWREMOTE), and Renovate's 'npm tool constraint to v12' PRs would undo it.",
+      "matchFileNames": [
+        "renovate.json"
+      ],
+      "enabled": false
     }
   ],
   "constraints": {
