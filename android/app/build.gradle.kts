@@ -8,7 +8,10 @@ plugins {
 
 android {
     namespace = "io.github.nissaar.photosweep"
-    compileSdk = 37
+    // Compose 1.13 needs API 37.1 or later to compile against; targetSdk stays as is.
+    compileSdk {
+        version = release(37) { minorApiLevel = 2 }
+    }
 
     defaultConfig {
         applicationId = "io.github.nissaar.photosweep"
